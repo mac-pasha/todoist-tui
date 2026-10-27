@@ -24,7 +24,7 @@
         "`.gitignore` ignores `/target`, and local artefacts; it does not ignore `Cargo.lock`"
       ],
       "context": "Greenfield repo: this is the first Rust file in the tree. Binary crate (not workspace). Keep module files out of this PR - later tasks add them. Requirement REQ-001 mandates HTTPS via rustls only. keyring pulls dbus/secret-service on Linux: confirm `cargo build` works and note any system packages needed in the PR description (CI job in T-008 verifies on a clean container).",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-002",
@@ -46,7 +46,7 @@
         "`cargo clippy --all-targets -- -D warnings` exits 0 on the current tree"
       ],
       "context": "Touches Cargo.toml again after T-001 - rebase on it, do not re-pin dependencies here. Lint strictness must still allow later epics to compile; prefer warn for pedantic, deny for the unwrap/expect pair.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-003",
@@ -69,7 +69,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Pure types, no IO. thiserror for library-style typed errors, anyhow only at the top of main. These variants are extended by later epics (ApiError, StoreError) - keep the enum non_exhaustive-friendly and the module free of domain logic.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-004",
@@ -94,7 +94,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Use the `directories`/`dirs` crate pinned in T-001 for non-XDG platforms, but honour XDG env vars first on all platforms so tests can redirect them. Env-var mutation in tests is process-global: serialise those tests (e.g. a mutex or `serial_test`-style guard) and document the choice. Windows fallbacks are best-effort per NFR.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-005",
@@ -120,7 +120,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Depends on T-004 for `paths::config_file()`. Use the `toml` crate; map `toml::de::Error::span()`/line info into `ConfigError::Parse`. Keymap is a free-form string map here - EPIC-07 interprets it; do not validate key names yet.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-006",
@@ -145,7 +145,7 @@
         "`src/main.rs` declares `mod log;` and builds; `cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Depends on T-004 for state dir. Use `tracing-appender` rolling + `NonBlocking` (hold the `WorkerGuard` in main). Name the module `log` but avoid clashing with the `log` crate facade. The redaction helper is the seam EPIC-02 uses for the API token and EPIC-12's automated log scan test.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-007",
@@ -172,7 +172,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "clap derive. Keep stubs free of any network/DB/UI code - EPIC-02/03/06/11 fill them in. Verify the clap command tree with `Command::debug_assert()` in a unit test. The `add` positional exists only so EPIC-11 can attach behaviour without changing the CLI surface.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-008",
@@ -193,7 +193,7 @@
         "Workflow is verified green once on a pushed branch (run link pasted in the PR); a deliberately mis-formatted file makes the fmt step fail (verified once, then reverted)"
       ],
       "context": "Mirrors the local commands recorded in CLAUDE.md by T-009. EPIC-12 later adds integration/perf gate jobs - keep job names stable and generic (fmt, clippy, test, build) so they can be extended.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-009",
@@ -214,7 +214,7 @@
         "Only the Project section between the PROJECT SECTION markers is modified; the Agentic SDLC section is byte-identical (`git diff` shows changes only within those markers)"
       ],
       "context": "Hard rule 10 allows editing CLAUDE.md only because this epic explicitly asks for it - restrict the diff to the marked Project section. Commands must match T-008's workflow exactly so contributors and CI agree.",
-      "status": "review"
+      "status": "done"
     }
   ]
 }
