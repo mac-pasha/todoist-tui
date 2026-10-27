@@ -145,7 +145,7 @@
         "`src/main.rs` declares `mod log;` and builds; `cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Depends on T-004 for state dir. Use `tracing-appender` rolling + `NonBlocking` (hold the `WorkerGuard` in main). Name the module `log` but avoid clashing with the `log` crate facade. The redaction helper is the seam EPIC-02 uses for the API token and EPIC-12's automated log scan test.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-007",

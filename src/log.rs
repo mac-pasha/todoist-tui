@@ -258,3 +258,224 @@ impl<T> fmt::Debug for Secret<T> {
         f.write_str(REDACTED)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests (unit-tester). The tracing subscriber is process-global,
+    //! so `init` runs exactly once via [`fixture`] and its guard is leaked.
+    use super::*;
+    use crate::error::AppError;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    struct Opaque {
+        _a: u8,
+    }
+
+    #[derive(Debug)]
+    struct Creds {
+        _user: &'static str,
+    }
+
+    struct Fixture {
+        base: PathBuf,
+        dir: PathBuf,
+        /// Whether the first-ever `init` call returned `Ok`.
+        first_ok: bool,
+    }
+
+    static FIXTURE: OnceLock<Fixture> = OnceLock::new();
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fixture() -> &'static Fixture {
+        FIXTURE.get_or_init(|| {
+            let _g = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let base =
+                std::env::temp_dir().join(format!("todoist-tui-logtest-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&base);
+            // Nested + nonexistent: init must create it recursively.
+            let dir = base.join("a").join("b").join("state");
+            assert!(!dir.exists());
+            let saved = std::env::var_os("RUST_LOG");
+            std::env::remove_var("RUST_LOG");
+            let res = init(LogOptions::new().with_state_dir(&dir));
+            if let Some(v) = saved {
+                std::env::set_var("RUST_LOG", v);
+            }
+            let first_ok = match res {
+                Ok(guard) => {
+                    std::mem::forget(guard);
+                    true
+                }
+                Err(_) => false,
+            };
+            Fixture {
+                base,
+                dir,
+                first_ok,
+            }
+        })
+    }
+
+    fn log_files(dir: &Path) -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok().map(|e| e.path()))
+                    .filter(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.starts_with("todoist-tui.log"))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn read_all(dir: &Path) -> String {
+        log_files(dir)
+            .iter()
+            .map(|p| fs::read_to_string(p).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Polls until `pred(content)` holds or ~5s elapse; returns final content.
+    fn wait_for(dir: &Path, pred: impl Fn(&str) -> bool) -> String {
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            let c = read_all(dir);
+            if pred(&c) || Instant::now() > end {
+                return c;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    #[test]
+    fn init_creates_missing_nested_dir_and_log_file() {
+        let f = fixture();
+        assert!(f.first_ok, "first init must succeed");
+        assert!(f.dir.is_dir(), "nested state dir must be created");
+        let files = log_files(&f.dir);
+        assert!(!files.is_empty(), "todoist-tui.log* must exist");
+        let name = files[0].file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert!(name.starts_with("todoist-tui.log"), "got {name}");
+    }
+
+    #[test]
+    fn info_events_are_written_to_file() {
+        let f = fixture();
+        tracing::info!("marker-plain-info-7f3a");
+        let c = wait_for(&f.dir, |c| c.contains("marker-plain-info-7f3a"));
+        assert!(c.contains("marker-plain-info-7f3a"), "log content: {c:?}");
+        assert!(!c.contains("\u{1b}["), "ANSI escapes must be disabled");
+    }
+
+    #[test]
+    fn secret_is_redacted_in_log_file() {
+        let f = fixture();
+        let secret = Secret::new("tok_abc123".to_string());
+        tracing::info!(token = %secret, "display-field-marker");
+        tracing::info!(token = ?secret, "debug-field-marker");
+        tracing::info!("interpolated {} and {:?} secret-fmt-marker", secret, secret);
+        // Sentinel logged after: once it is on disk, earlier lines are too.
+        tracing::info!("sentinel-end-marker");
+        let c = wait_for(&f.dir, |c| c.contains("sentinel-end-marker"));
+        assert!(c.contains("sentinel-end-marker"), "log content: {c:?}");
+        assert!(c.contains("display-field-marker"));
+        assert!(c.contains("debug-field-marker"));
+        assert!(c.contains("secret-fmt-marker"));
+        assert!(c.contains("***"), "redaction marker missing: {c:?}");
+        assert_eq!(c.matches("tok_abc123").count(), 0, "secret leaked: {c:?}");
+        // Every one of the three events carries the marker.
+        assert!(c.matches("***").count() >= 4);
+    }
+
+    #[test]
+    fn default_level_is_info_when_rust_log_unset() {
+        // Fixture was initialised with RUST_LOG removed.
+        let f = fixture();
+        tracing::debug!("debug-should-be-filtered-91c2");
+        tracing::trace!("trace-should-be-filtered-91c2");
+        tracing::warn!("warn-passes-91c2");
+        let c = wait_for(&f.dir, |c| c.contains("warn-passes-91c2"));
+        assert!(c.contains("warn-passes-91c2"), "log content: {c:?}");
+        assert!(!c.contains("debug-should-be-filtered-91c2"));
+        assert!(!c.contains("trace-should-be-filtered-91c2"));
+        assert_eq!(DEFAULT_FILTER, "info");
+    }
+
+    #[test]
+    fn second_init_fails_cleanly_without_panic_or_side_effects() {
+        let f = fixture();
+        let other = f.base.join("second-init-dir");
+        let res = init(LogOptions::new().with_state_dir(&other).with_stderr(true));
+        match res {
+            Err(AppError::Log(LogError::OpenFile { .. })) => {}
+            Err(e) => panic!("unexpected error variant: {e:?}"),
+            Ok(_) => panic!("second init must not succeed"),
+        }
+        assert!(!other.exists(), "failed init must not create its dir");
+        // Concurrent calls also fail cleanly.
+        let hs: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    init(LogOptions::new().with_state_dir(fixture().base.join("x"))).is_err()
+                })
+            })
+            .collect();
+        for h in hs {
+            assert!(h.join().unwrap_or(false));
+        }
+    }
+
+    #[test]
+    fn secret_display_and_debug_are_exactly_redacted() {
+        assert_eq!(format!("{}", Secret::new(42_i32)), "***");
+        assert_eq!(format!("{:?}", Secret::new(42_i32)), "***");
+        assert_eq!(format!("{}", Secret::new("tok_abc123".to_string())), "***");
+        assert_eq!(
+            format!("{:?}", Secret::new("tok_abc123".to_string())),
+            "***"
+        );
+        assert_eq!(format!("{}", Secret::new(String::new())), "***");
+        assert_eq!(format!("{:#?}", Secret::new("x")), "***");
+        // Struct without Display/Debug: Secret<T> must not require bounds.
+        let s = Secret::new(Opaque { _a: 1 });
+        assert_eq!(format!("{s}"), "***");
+        assert_eq!(format!("{s:?}"), "***");
+        let s = Secret::new(Creds {
+            _user: "tok_abc123",
+        });
+        assert_eq!(format!("{s:?}"), "***");
+        // Nested inside another Debug-derived type stays redacted.
+        let v = vec![Secret::new("tok_abc123")];
+        assert_eq!(format!("{v:?}"), "[***]");
+        assert_eq!(REDACTED, "***");
+    }
+
+    #[test]
+    fn expose_returns_original_value_unchanged() {
+        assert_eq!(*Secret::new(42_i32).expose(), 42);
+        let s = Secret::new("tok_abc123".to_string());
+        assert_eq!(s.expose(), "tok_abc123");
+        // Exposing does not alter later rendering.
+        assert_eq!(format!("{s}"), "***");
+        assert_eq!(Secret::new(String::new()).expose(), "");
+        assert_eq!(Secret::new(vec![1, 2, 3]).expose(), &vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn log_options_builders_set_fields() {
+        let o = LogOptions::new();
+        assert!(o.state_dir.is_none());
+        assert!(!o.stderr, "TUI default must not log to stderr");
+        let o = LogOptions::new().with_state_dir("/x/y").with_stderr(true);
+        assert_eq!(o.state_dir.as_deref(), Some(Path::new("/x/y")));
+        assert!(o.stderr);
+    }
+}
