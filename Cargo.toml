@@ -51,3 +51,22 @@ toml = "1.1"
 
 # Platform config/data directories
 directories = "6.0"
+
+# Lint policy (T-002, EPIC-01). Groups stay at warn so later epics keep
+# compiling; only the unwrap/expect pair is denied, and only in non-test
+# code (scoped via clippy.toml `allow-unwrap-in-tests` / `allow-expect-in-tests`,
+# equivalent to a crate-level `#![cfg_attr(test, allow(...))]` without
+# touching src/*.rs). Thresholds live in clippy.toml.
+# NOTE: groups carry negative `priority` so the individual lints below win
+# over the group level (clippy::lint_groups_priority under -D warnings).
+[lints.rust]
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -2 }
+# A TUI must survive bad data: no blind `.unwrap()` / `.expect(...)` in
+# production code. Return errors instead (T-003 hierarchy).
+unwrap_used = "deny"
+expect_used = "deny"
