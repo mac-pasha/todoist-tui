@@ -9,6 +9,9 @@ mod error;
 /// Platform config/state directory resolution (T-004).
 mod config;
 
+/// Tracing to a rotating state-dir log file, with secret redaction (T-006).
+mod log;
+
 fn main() {
     println!("todoist-tui bootstrap placeholder (T-001)");
 }
@@ -292,10 +295,14 @@ mod bootstrap_tests {
             // Ignore this test module's own declaration; acceptance asks
             // that the placeholder crate declares no production modules.
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
-            // T-003 requires `mod error;`, T-004 requires `mod config;`. The
-            // only other permitted lines are the cfg(test) modules below.
+            // T-003 requires `mod error;`, T-004 requires `mod config;`,
+            // T-006 requires `mod log;`. The only other permitted lines are
+            // the cfg(test) modules below.
             .filter(|l| {
-                *l != "mod error;" && *l != "mod config;" && !l.starts_with("mod error_tests")
+                *l != "mod error;"
+                    && *l != "mod config;"
+                    && *l != "mod log;"
+                    && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)
             .collect();

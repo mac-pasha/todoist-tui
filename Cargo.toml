@@ -34,9 +34,10 @@ keyring = "4.2"
 # IDs
 uuid = { version = "1.29", features = ["v4"] }
 
-# Logging / tracing
+# Logging / tracing. tracing-subscriber's `env-filter` feature is required
+# for the RUST_LOG-driven `EnvFilter` (T-006); the pin stays major-only "0.3".
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
 # Error handling
