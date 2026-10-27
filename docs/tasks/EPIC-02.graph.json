@@ -1,0 +1,272 @@
+{
+  "epic": "EPIC-02",
+  "title": "Auth & token storage",
+  "source": "docs/epics/REQ-001.epics.md",
+  "tasks": [
+    {
+      "id": "T-101",
+      "title": "Add AuthError variants and the Token newtype",
+      "type": "code",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "src/error.rs",
+        "src/auth/mod.rs",
+        "src/auth/token.rs",
+        "src/main.rs"
+      ],
+      "acceptance": [
+        "`src/error.rs` gains `AuthError` (thiserror, `#[non_exhaustive]`) with at least the variants `NotAuthenticated`, `InvalidToken`, `Backend { source }` (keyring/OS failure), `Io { path: PathBuf, source: io::Error }`, `EmptyToken`, and `AppError` gains `Auth(#[from] AuthError)` rendering with an `auth: ` prefix",
+        "No `AuthError` variant has a field that can hold raw token material; a unit test formats every variant with `{}` and `{:?}` and asserts the fixture token string `tok_fake_abc123` never appears",
+        "`src/auth/token.rs` defines `Token(Secret<String>)` with `Token::new`, `Token::expose(&self) -> &str`, and `Display`/`Debug` rendering exactly `log::REDACTED` (`***`); `Token::new` on an empty/whitespace-only string returns `AuthError::EmptyToken`",
+        "`Token` is constructible only from an owned `String` and the struct field is private, so `expose` is the single greppable read path (unit test asserts `format!(\"{token:?}\")  == \"***\"` and `format!(\"{token}\") == \"***\"`)",
+        "`src/auth/mod.rs` declares `pub mod token;` and re-exports `Token`; `src/main.rs` declares `mod auth;`",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Reuse the existing redaction helper `crate::log::Secret<T>` (Display/Debug already render `***`, raw access via `Secret::expose`) rather than writing new redaction. Follow the error style in `src/error.rs` (T-003): thiserror enums, `#[non_exhaustive]`, every file-touching variant carries its `PathBuf`. Keep `#![allow(dead_code)]` at module scope like `error.rs`/`config/paths.rs` do, since consumers land in later tasks of this epic. No IO and no network in this task.",
+      "status": "todo"
+    },
+    {
+      "id": "T-102",
+      "title": "Define the TokenSource seam and in-memory test source",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-101"
+      ],
+      "files": [
+        "src/auth/mod.rs",
+        "src/auth/source.rs"
+      ],
+      "acceptance": [
+        "`src/auth/source.rs` defines `pub trait TokenSource` with `fn load(&self) -> Result<Option<Token>>`, `fn store(&self, token: &Token) -> Result<()>`, `fn clear(&self) -> Result<()>` and `fn describe(&self) -> &'static str` (human-readable backend name for user-visible notices)",
+        "The trait is object-safe: a unit test holds a `Box<dyn TokenSource>` and calls all four methods through it",
+        "`MemoryTokenSource` (test/dev backend) implements the trait with interior mutability; round-trip test: `store` then `load` returns an equal token, `clear` then `load` returns `Ok(None)`, `clear` on empty storage is a no-op returning `Ok(())`",
+        "Doc comment on the trait states it is the seam for a future OAuth token source (REQ-001 open question 7) and that implementations must never log token material",
+        "`cargo clippy --all-targets -- -D warnings` clean and `cargo test --all` passes"
+      ],
+      "context": "Pure abstraction task, no OS/keyring/file code: the concrete backends land in T-103 (keyring) and T-104 (file). Methods return the crate-wide `crate::error::Result<T>` (errors are `AppError::Auth(AuthError::..)`). `clear` must be idempotent because `logout` (T-108) calls it unconditionally on every backend.",
+      "status": "todo"
+    },
+    {
+      "id": "T-103",
+      "title": "Keyring-backed token source",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-102"
+      ],
+      "files": [
+        "src/auth/mod.rs",
+        "src/auth/keyring_source.rs"
+      ],
+      "acceptance": [
+        "`KeyringTokenSource` implements `TokenSource` over the `keyring` crate with a fixed service name `todoist-tui` and a fixed account/user `api-token` (both exposed as `pub const` so T-108/tests reference them instead of re-typing literals)",
+        "`load` maps a missing entry (`keyring::Error::NoEntry`) to `Ok(None)`, and maps every other keyring failure to `AuthError::Backend`; it never panics and never unwraps",
+        "`KeyringTokenSource::is_available()` probes the platform backend once (e.g. attempted entry construction / read) and returns `false` on `keyring::Error::PlatformFailure` or `NoStorageAccess`, so T-105 can pick the fallback on headless Linux",
+        "Unit tests run against keyring's mock/in-process credential store (or an injected `keyring` entry factory) so they pass in CI with no secret-service / dbus daemon present; a test asserts store→load round-trip, load-on-empty is `Ok(None)`, and clear-on-empty is `Ok(())`",
+        "A unit test formats `KeyringTokenSource` with `{:?}` (or asserts it does not derive `Debug` over token data) and asserts the fixture token `tok_fake_abc123` does not appear",
+        "`cargo clippy --all-targets -- -D warnings` clean"
+      ],
+      "context": "`keyring = \"4.2\"` is already in Cargo.toml (Linux: secret-service via zbus, macOS: keychain). Do not add dependencies - if the mock store needs a feature flag that is not enabled, stop and report instead of editing Cargo.toml (it is outside this task's files). Risk called out in the epic: headless Linux has no secret-service, so `is_available()` must be a real probe, not an `cfg!(target_os)` guess. Never log the token; log only `describe()` and error kinds.",
+      "status": "todo"
+    },
+    {
+      "id": "T-104",
+      "title": "File-backed token source with 0600 permissions",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-102"
+      ],
+      "files": [
+        "src/auth/mod.rs",
+        "src/auth/file_source.rs",
+        "src/config/paths.rs"
+      ],
+      "acceptance": [
+        "`src/config/paths.rs` gains `pub fn token_file() -> Result<PathBuf, ConfigError>` returning `<config_dir>/token`, resolved by the existing `XDG_CONFIG_HOME`-first logic; a unit test with `XDG_CONFIG_HOME` set asserts the exact path `<base>/todoist-tui/token`",
+        "`FileTokenSource` implements `TokenSource`, defaulting to `paths::token_file()` with a `FileTokenSource::at(path)` constructor used by tests",
+        "`store` creates the parent directory when missing and writes the file such that on Unix its mode is exactly `0o600` (test asserts `metadata.permissions().mode() & 0o777 == 0o600`), including when the file already existed with mode `0o644`",
+        "On Unix the permissions are applied at creation time (`OpenOptions::mode(0o600)`) so the token is never momentarily world-readable; the write is atomic (temp file in the same directory + rename) and the temp file is also created with mode 0o600",
+        "`load` returns `Ok(None)` when the file does not exist, trims trailing newline/whitespace, returns `AuthError::EmptyToken` for an empty/whitespace-only file, and maps read failures to `AuthError::Io { path, .. }`",
+        "`clear` removes the file and returns `Ok(())` when the file is already absent; permission-denied removal maps to `AuthError::Io` with the path",
+        "Unix-only assertions are `#[cfg(unix)]`-gated so the suite still compiles on Windows",
+        "`cargo clippy --all-targets -- -D warnings` clean"
+      ],
+      "context": "Reuse `crate::config::paths` conventions (T-004): pure functions reading env at call time, `ConfigError::Io { path, source }` on failure; add the new constant next to `CONFIG_FILE_NAME`/`LOG_FILE_NAME`. REQ-001 NFR requires 0600 for the fallback token file. Tests must use a temp dir via `FileTokenSource::at`, never the real user config dir; env-mutating tests in `paths.rs` already serialize with a mutex - follow that pattern.",
+      "status": "todo"
+    },
+    {
+      "id": "T-105",
+      "title": "TokenStore resolution: keyring first, file fallback with notice",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-103",
+        "T-104"
+      ],
+      "files": [
+        "src/auth/mod.rs",
+        "src/auth/store.rs"
+      ],
+      "acceptance": [
+        "`TokenStore::resolve()` returns a store that uses `KeyringTokenSource` when `KeyringTokenSource::is_available()` is true and `FileTokenSource` otherwise, and records which backend was chosen in `TokenStore::backend_notice() -> Option<String>` (`Some(..)` only for the fallback, naming the file path and that its mode is 0600)",
+        "`TokenStore::load()` reads from the active backend and, when it returns `None`, falls back to reading the *other* backend so a token written before a backend change is still found; a unit test with two injected `MemoryTokenSource`s proves the secondary read",
+        "`TokenStore::store()` writes only to the active backend; `TokenStore::clear()` clears both backends unconditionally and succeeds even if one of them is empty or unavailable (test: one backend returns `AuthError::Backend` from `clear`, the other still gets cleared and the error is reported, not swallowed silently)",
+        "`TokenStore::require()` returns `AuthError::NotAuthenticated` when no backend holds a token, and the rendered message tells the user to run `todoist-tui auth`",
+        "`TokenStore::with_sources(primary, secondary)` constructor exists so tests inject fakes without touching the OS keyring or the real config dir",
+        "A unit test asserts `format!(\"{store:?}\")` of a `TokenStore` holding `tok_fake_abc123` does not contain the token",
+        "`cargo clippy --all-targets -- -D warnings` clean and `cargo test --all` passes"
+      ],
+      "context": "This is the single entry point every other command uses (`sync`/`add`/`today` in T-109, `logout` in T-108). Epic risk: headless Linux without secret-service is the common case, so the fallback path must be first-class and fully unit-tested via `with_sources`. The user-visible notice text is printed by the `auth` command (T-107), not here - this task only produces the string.",
+      "status": "todo"
+    },
+    {
+      "id": "T-106",
+      "title": "Token validation against the Todoist API (HTTPS-only client)",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-101"
+      ],
+      "files": [
+        "src/auth/validate.rs",
+        "src/auth/mod.rs",
+        "src/error.rs",
+        "Cargo.toml"
+      ],
+      "acceptance": [
+        "`validate::check(token, base_url)` performs one cheap authenticated request to `<base_url>/api/v1/sync` with `Authorization: Bearer <token>`, `sync_token=\"*\"` and `resource_types=[\"user\"]`, returning `Ok(())` on 2xx and `AuthError::InvalidToken` on 401/403",
+        "The reqwest client is built with `https_only(true)` and an explicit request timeout; a unit test asserts a `http://` base URL is rejected without a network call",
+        "Non-auth failures (transport error, timeout, 5xx) map to a distinct `AuthError` variant (e.g. `Backend`/`Transport`) and are *not* reported as \"invalid token\"; a test with a mock returning 500 asserts the error is not `InvalidToken`",
+        "A blocking wrapper `validate::check_blocking(token, base_url)` builds a current-thread tokio runtime so the sync `main`/CLI path (T-107) can call it without becoming async",
+        "Integration-style unit tests use `wiremock` (added as a `[dev-dependencies]` entry, major.minor pinned) with a local mock server: 200 → Ok, 401 → `InvalidToken`, 500 → non-`InvalidToken` error; a test asserts the outgoing request carries exactly one `Authorization` header whose value is `Bearer tok_fake_abc123`",
+        "A test asserts the token string never appears in the `Debug` rendering of the returned error nor in the error's `Display`",
+        "`cargo clippy --all-targets -- -D warnings` clean"
+      ],
+      "context": "Deliberately minimal and self-contained: EPIC-03 owns the real typed Sync API client with retries/backoff, so do NOT build retry, rate-limit or domain-model code here - a doc comment must say EPIC-03 supersedes this and that this module exists only to validate a token at `auth` time. `base_url` is a parameter (default const `https://api.todoist.com`) purely so wiremock can point it at `127.0.0.1`. The only Cargo.toml change allowed is adding `wiremock` under `[dev-dependencies]`; do not touch the existing dependency pins or lint sections.",
+      "status": "todo"
+    },
+    {
+      "id": "T-107",
+      "title": "`auth` command: no-echo prompt, validate, store, fallback notice",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-105",
+        "T-106"
+      ],
+      "files": [
+        "src/cli/auth.rs",
+        "src/cli/commands.rs",
+        "src/cli/mod.rs"
+      ],
+      "acceptance": [
+        "`todoist-tui auth` prompts on stderr (`Todoist API token: `), reads one line from stdin with terminal echo disabled while a TTY is attached, re-enables echo before returning on every path including error and Ctrl-C/EOF, and never accepts the token as a CLI argument (`build_cli()` has no token arg - asserted by a test over the clap `Command`)",
+        "When stdin is not a TTY the token is read from stdin without attempting echo control, so the command is testable and pipeable; a non-TTY run with an empty stdin exits non-zero with an \"empty token\" message",
+        "A valid token (mock API 200) is stored via `TokenStore::store` and the command exits 0 printing a confirmation that contains no token characters",
+        "An invalid token (mock API 401) exits non-zero with a message containing \"invalid token\" and stores nothing (assert `TokenStore::load()` is still `None` afterwards)",
+        "When the fallback backend is active, `TokenStore::backend_notice()` is printed to stderr explaining the keyring was unavailable and that the token was written to `<path>` with mode 0600",
+        "`commands::dispatch` routes `Commands::Auth` to this implementation instead of `AppError::NotImplemented`; the other four subcommands keep their current behaviour in this task",
+        "No `tracing` event in this path contains the token: events log only `backend` and outcome; a test (or a documented log-scan assertion) covers it",
+        "`cargo clippy --all-targets -- -D warnings` clean"
+      ],
+      "context": "Follow the dispatch pattern in `src/cli/commands.rs` (match on `Commands`, return `crate::error::Result<()>`; `main` prints the error and returns exit code 1). Use `crossterm` (already a dependency) for echo control - do not add `rpassword` or any new crate. Wrap the entered string in `Token::new` immediately so no bare `String` token lives beyond the read call. Manual terminal-echo verification is written up in T-111. Keep the function small: the store/validate logic already exists in T-105/T-106.",
+      "status": "todo"
+    },
+    {
+      "id": "T-108",
+      "title": "`logout` command: wipe both token backends and call the cache-wipe hook",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-107"
+      ],
+      "files": [
+        "src/cli/logout.rs",
+        "src/cli/commands.rs",
+        "src/cli/mod.rs",
+        "src/auth/cache_wipe.rs",
+        "src/auth/mod.rs"
+      ],
+      "acceptance": [
+        "`src/auth/cache_wipe.rs` defines `pub trait CacheWipe { fn wipe(&self) -> Result<()>; fn describe(&self) -> &'static str; }` plus `NoopCacheWipe` whose doc comment states EPIC-04 replaces it with the real SQLite `delete_all()` and that it currently deletes nothing",
+        "`todoist-tui logout` calls `TokenStore::clear()` (both keyring and fallback file) and then the injected `CacheWipe`, and exits 0 even when nothing was stored (idempotent); the printed summary names each thing that was cleared",
+        "After `logout`, `TokenStore::load()` returns `Ok(None)` and the fallback token file does not exist on disk (asserted with an injected temp-dir `FileTokenSource`)",
+        "If one wipe step fails the command exits non-zero, reports which step failed, and still attempts the remaining steps (test: failing keyring `clear` still clears the file source)",
+        "`commands::dispatch` routes `Commands::Logout` to this implementation instead of `AppError::NotImplemented`",
+        "Logout emits no `tracing` event containing token material (only counts/backends)",
+        "`cargo clippy --all-targets -- -D warnings` clean"
+      ],
+      "context": "EPIC-04 owns the cache DB, so the cache part is a hook only - do NOT create any rusqlite/schema code here (flagged as a cross-epic open question in the epic file). Touches `src/cli/commands.rs`, which T-107 also edits, hence the dependency on T-107 rather than a real logic ordering. Reuse `TokenStore::clear` from T-105; this task adds no new storage logic.",
+      "status": "todo"
+    },
+    {
+      "id": "T-109",
+      "title": "\"Not authenticated\" guard for sync, add and today",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-108"
+      ],
+      "files": [
+        "src/cli/commands.rs",
+        "src/cli/mod.rs"
+      ],
+      "acceptance": [
+        "`sync`, `add` and `today` each resolve a `TokenStore` and call `require()` before doing anything else; with no stored token they exit non-zero with a message containing \"not authenticated\" and the hint `run \\`todoist-tui auth\\``",
+        "With a token present, each of the three still returns its existing `AppError::NotImplemented(\"<name>\")` (later epics replace the body) - a test asserts the guard did not change the authenticated-path behaviour",
+        "The guard is a single shared helper function (no copy-pasted blocks), unit-tested with an injected `TokenStore::with_sources` fake for both branches",
+        "No token material reaches the error message or the log in either branch (assertion over the rendered `AppError`)",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Small wiring task on top of T-105's `TokenStore::require()`. Keep `AppError::NotImplemented` as the authenticated-path outcome - this epic must not start implementing sync/add/today. Sequenced after T-108 only because all three tasks edit `src/cli/commands.rs`.",
+      "status": "todo"
+    },
+    {
+      "id": "T-110",
+      "title": "End-to-end CLI tests for auth, logout and the auth guard",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-109"
+      ],
+      "files": [
+        "tests/auth_cli.rs"
+      ],
+      "acceptance": [
+        "Tests spawn the real binary via `CARGO_BIN_EXE_todoist-tui` with `HOME`/`XDG_CONFIG_HOME`/`XDG_STATE_HOME` redirected into `CARGO_TARGET_TMPDIR`, exactly like the existing `tests/cli.rs` sandbox helper - no real user config, state or keyring entry is touched",
+        "`auth` with a wiremock server returning 200 and the token piped on stdin exits 0; a *second* process run of a guarded command (e.g. `today`) finds the stored token and does not prompt (asserted via exit code / absence of the prompt string on stderr)",
+        "`auth` against a 401 mock exits non-zero, stderr contains \"invalid token\", and the fallback token file does not exist afterwards",
+        "Fallback path: with the keyring forced unavailable, `auth` writes `<XDG_CONFIG_HOME>/todoist-tui/token` and `#[cfg(unix)]` asserts its mode is exactly 0o600; stderr contains the fallback notice naming the path",
+        "`logout` after a successful `auth` removes the fallback file, exits 0, and a following `today` exits non-zero with \"not authenticated\"; a second consecutive `logout` also exits 0 (idempotent)",
+        "`sync`, `add \"x\"` and `today` each exit non-zero with \"not authenticated\" when no token is stored",
+        "Log-leak scan: after the full auth→logout sequence, every `todoist-tui.log*` file under the sandbox state dir is read and asserted to contain zero occurrences of the fixture token `tok_fake_abc123` while containing at least one `***`",
+        "The whole file uses only fake tokens (`tok_fake_*`); no real credentials, and `cargo test --all` passes with no network access"
+      ],
+      "context": "Mirror the helpers at the top of `tests/cli.rs` (sandbox dir, env scrubbing of `RUST_LOG`/`RUST_BACKTRACE`, stdout/stderr helpers) rather than inventing a new harness. The binary needs a way to point validation at the mock server and to force keyring-unavailable in-process - use an env var seam (e.g. `TODOIST_API_BASE_URL`, `TODOIST_TUI_FORCE_FILE_TOKEN`) if T-106/T-105 already expose one; if they do not, stop and report instead of editing `src/`, since `src/` is outside this task's files.",
+      "status": "todo"
+    },
+    {
+      "id": "T-111",
+      "title": "Document auth storage, fallback and the manual echo check",
+      "type": "docs",
+      "deps": [
+        "T-109"
+      ],
+      "files": [
+        "docs/manual/epic-02-auth-checks.md"
+      ],
+      "acceptance": [
+        "Documents where the token is stored per platform (macOS keychain, Linux secret-service, Windows credential manager) and the `$XDG_CONFIG_HOME/todoist-tui/token` 0600 fallback, including when the fallback is chosen (headless Linux / no secret-service)",
+        "Contains a reproducible manual checklist with expected results for: (1) terminal echo is off while typing the token, (2) the token never appears in `ps`/shell history because it is not a CLI argument, (3) `logout` leaves neither a keyring entry nor the fallback file, (4) `stat -c %a` on the fallback file prints 600",
+        "States explicitly that `logout` currently wipes the token only and that cache wiping is a no-op hook until EPIC-04 lands the SQLite store",
+        "Uses only fake tokens in all examples; no real token, account id or personal data appears",
+        "Markdown lints/links are valid and the file is referenced from the EPIC-02 PR description"
+      ],
+      "context": "The epic's acceptance says terminal echo disabling is verified by a documented manual check - this file is that artefact. Keep it short (one page) and factual; README/user docs are EPIC-12's job, so do not duplicate installation or keybinding docs here.",
+      "status": "todo"
+    }
+  ]
+}
