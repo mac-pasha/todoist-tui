@@ -25,3 +25,25 @@ pub mod paths;
 // the module-level `dead_code` allows above).
 #[allow(unused_imports)]
 pub use model::{Config, DefaultView};
+
+/// Shared test-only support for `config::paths` and `config::load`.
+///
+/// Both modules are compiled into the *same* test binary (both are `mod`s of
+/// this binary crate), so their `#[cfg(test)]` modules run as separate
+/// threads of one process, not separate processes. Any test that mutates
+/// `XDG_CONFIG_HOME` / `XDG_STATE_HOME` / `HOME` (process-global state) must
+/// therefore serialise against *every other such test in the binary*, not
+/// just the ones in its own module. A single shared [`Mutex`] here — rather
+/// than one `static ENV_LOCK` per module — is what gives that guarantee
+/// (T-104 follow-up: two independent per-module mutexes provided no real
+/// mutual exclusion between `paths` and `load` tests, causing an
+/// intermittent env-leak flake).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::Mutex;
+
+    /// Guards every env-var-mutating test in `config::paths` and
+    /// `config::load`. A plain `Mutex` is used instead of a `serial_test`
+    /// dependency (no new crates; `Cargo.toml` is out of scope).
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+}

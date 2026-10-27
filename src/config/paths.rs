@@ -47,6 +47,9 @@ const APPLICATION: &str = "todoist-tui";
 const CONFIG_FILE_NAME: &str = "config.toml";
 /// File name of the log file inside the state directory (T-006).
 const LOG_FILE_NAME: &str = "todoist-tui.log";
+/// File name of the file-backed token fallback inside the config directory
+/// (T-104).
+const TOKEN_FILE_NAME: &str = "token";
 
 /// Absolute path of the config directory: `<base>/todoist-tui`.
 ///
@@ -104,6 +107,38 @@ pub fn log_file() -> Result<PathBuf, ConfigError> {
     Ok(state_dir()?.join(LOG_FILE_NAME))
 }
 
+/// Absolute path of the file-backed token fallback:
+/// `<config_dir>/token`.
+///
+/// Used by [`crate::auth::file_source::FileTokenSource`] (T-104) as the
+/// fallback token store when the OS keyring is unavailable. The file itself
+/// is written with owner-only (`0600`) permissions by that backend; this
+/// function only resolves the path.
+///
+/// # Errors
+///
+/// Same failure modes as [`config_dir`].
+pub fn token_file() -> Result<PathBuf, ConfigError> {
+    Ok(config_dir()?.join(TOKEN_FILE_NAME))
+}
+
+/// Creates the config directory (recursively) and returns its path.
+///
+/// Idempotent: calling it when the directory already exists succeeds.
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Io`] when the config directory cannot be created,
+/// or when the home directory cannot be determined.
+pub fn ensure_config_dir() -> Result<PathBuf, ConfigError> {
+    let dir = config_dir()?;
+    fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
+        path: dir.clone(),
+        source,
+    })?;
+    Ok(dir)
+}
+
 /// Creates the state directory (recursively) and returns its path.
 ///
 /// Idempotent: calling it when the directory already exists succeeds.
@@ -142,20 +177,22 @@ fn project_dirs() -> Result<ProjectDirs, ConfigError> {
 }
 
 /// Unit tests (T-004). Environment variables are process-global and cargo
-/// runs tests on parallel threads, so every test takes `ENV_LOCK` through
-/// `EnvGuard`, which also snapshots and restores the variables it touches.
-/// A plain `Mutex` is used instead of a `serial_test` dependency (no new
-/// crates; `Cargo.toml` is out of scope). Tempdirs are built from
+/// runs tests on parallel threads, so every test takes the shared
+/// `crate::config::test_support::ENV_LOCK` through `EnvGuard`, which also
+/// snapshots and restores the variables it touches. That lock is shared with
+/// `config::load`'s tests (T-104 follow-up): both modules' `#[cfg(test)]`
+/// code runs in the same test binary, so a per-module mutex gave no real
+/// mutual exclusion between them. Tempdirs are built from
 /// `std::env::temp_dir()` + pid + counter (no `tempfile` dev-dependency).
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::test_support::ENV_LOCK;
     use std::ffi::OsString;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     const VARS: [&str; 3] = ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "HOME"];
 
@@ -350,6 +387,30 @@ mod tests {
     }
 
     #[test]
+    fn token_file_uses_xdg_config_home() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("token");
+        env::set_var("XDG_CONFIG_HOME", &tmp);
+        assert_eq!(token_file().unwrap(), tmp.join("todoist-tui").join("token"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_config_dir_creates_recursively_and_is_idempotent() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("ensure-cfg");
+        let base = tmp.join("deep").join("er");
+        env::set_var("XDG_CONFIG_HOME", &base);
+        let expected = base.join("todoist-tui");
+        assert!(!expected.exists());
+        assert_eq!(ensure_config_dir().unwrap(), expected);
+        assert!(expected.is_dir());
+        assert_eq!(ensure_config_dir().unwrap(), expected);
+        assert!(expected.is_dir());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn xdg_base_helper_filters_empty_and_unset() {
         let _g = EnvGuard::new();
         env::remove_var("XDG_CONFIG_HOME");
@@ -358,5 +419,124 @@ mod tests {
         assert_eq!(xdg_base("XDG_CONFIG_HOME"), None);
         env::set_var("XDG_CONFIG_HOME", "/x");
         assert_eq!(xdg_base("XDG_CONFIG_HOME"), Some(Path::new("/x").into()));
+    }
+}
+
+/// Extended T-104 coverage (unit-tester, different model family from the
+/// coder): `token_file`/`config_file` sibling invariant, empty-XDG
+/// fallthrough for the token path, `ensure_config_dir` failure when the
+/// base path is a regular file, and that creating the config directory
+/// conjures no files.
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use crate::config::test_support::ENV_LOCK;
+    use std::ffi::OsString;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::MutexGuard;
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    const VARS: [&str; 3] = ["XDG_CONFIG_HOME", "XDG_STATE_HOME", "HOME"];
+
+    struct EnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let saved = VARS.iter().map(|v| (*v, env::var_os(v))).collect();
+            Self { _lock: lock, saved }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (k, v) in &self.saved {
+                match v {
+                    Some(v) => env::set_var(k, v),
+                    None => env::remove_var(k),
+                }
+            }
+        }
+    }
+
+    fn tempdir(tag: &str) -> PathBuf {
+        let d = env::temp_dir().join(format!(
+            "todoist-tui-t104u-paths-{}-{}-{tag}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn token_file_is_a_sibling_of_config_file_in_the_config_dir() {
+        // The token fallback must live beside config.toml (same config
+        // dir), never in the state dir where T-006 puts logs.
+        let _g = EnvGuard::new();
+        let tmp = tempdir("sibling");
+        env::set_var("XDG_CONFIG_HOME", &tmp);
+        let tok = token_file().unwrap();
+        let cfg = config_file().unwrap();
+        assert_eq!(
+            tok.parent(),
+            cfg.parent(),
+            "token must live beside config.toml"
+        );
+        assert_eq!(tok.file_name().unwrap(), "token");
+        assert_ne!(tok, cfg);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn token_file_treats_empty_xdg_as_unset() {
+        // Per the XDG spec an empty value counts as unset: must fall to
+        // the platform default, never a relative "token/config"-ish path.
+        let _g = EnvGuard::new();
+        env::set_var("XDG_CONFIG_HOME", "");
+        let tok = token_file().unwrap();
+        assert!(tok.is_absolute(), "got {tok:?}");
+        assert_eq!(tok.file_name().unwrap(), "token");
+        #[cfg(target_os = "linux")]
+        assert!(tok.ends_with(".config/todoist-tui/token"), "got {tok:?}");
+    }
+
+    #[test]
+    fn ensure_config_dir_errors_with_io_when_base_is_a_file() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("blocked");
+        let file = tmp.join("blocker");
+        fs::write(&file, b"x").unwrap();
+        env::set_var("XDG_CONFIG_HOME", &file); // base is a regular file
+        match ensure_config_dir() {
+            Err(ConfigError::Io { path, .. }) => {
+                assert_eq!(path, file.join("todoist-tui"));
+            }
+            other => panic!("expected ConfigError::Io, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_config_dir_conjures_no_files() {
+        // Directory creation only: no token file, no config.toml may
+        // appear as a side effect (a TUI must never conjure config).
+        let _g = EnvGuard::new();
+        let tmp = tempdir("bare");
+        env::set_var("XDG_CONFIG_HOME", &tmp);
+        let dir = ensure_config_dir().unwrap();
+        assert_eq!(dir, tmp.join("todoist-tui"));
+        assert!(dir.is_dir());
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            0,
+            "no files may appear as a side effect"
+        );
+        let _ = fs::remove_dir_all(&tmp);
     }
 }
