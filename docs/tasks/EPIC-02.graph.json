@@ -46,7 +46,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean and `cargo test --all` passes"
       ],
       "context": "Pure abstraction task, no OS/keyring/file code: the concrete backends land in T-103 (keyring) and T-104 (file). Methods return the crate-wide `crate::error::Result<T>` (errors are `AppError::Auth(AuthError::..)`). `clear` must be idempotent because `logout` (T-108) calls it unconditionally on every backend.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-103",
