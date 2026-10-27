@@ -354,7 +354,12 @@ mod error_tests {
     }
 
     fn parse(path: &str, line: usize, col: usize, msg: &str) -> ConfigError {
-        ConfigError::Parse { path: PathBuf::from(path), line, column: col, message: msg.into() }
+        ConfigError::Parse {
+            path: PathBuf::from(path),
+            line,
+            column: col,
+            message: msg.into(),
+        }
     }
 
     // Acceptance 4
@@ -366,7 +371,10 @@ mod error_tests {
         assert!(s.contains("42"), "{s}");
         assert!(s.contains('7'), "{s}");
         assert!(s.contains("bad key"), "{s}");
-        assert!(matches!(e, AppError::Config(ConfigError::Parse { line: 42, .. })));
+        assert!(matches!(
+            e,
+            AppError::Config(ConfigError::Parse { line: 42, .. })
+        ));
     }
 
     // Acceptance 3
@@ -375,12 +383,36 @@ mod error_tests {
         let p = "/fake/dir/file.x";
         let errs: Vec<String> = vec![
             parse(p, 1, 1, "m").to_string(),
-            ConfigError::Io { path: p.into(), source: ioe() }.to_string(),
-            LogError::CreateDir { path: p.into(), source: ioe() }.to_string(),
-            LogError::OpenFile { path: p.into(), source: ioe() }.to_string(),
-            AppError::from(ConfigError::Io { path: p.into(), source: ioe() }).to_string(),
-            AppError::from(LogError::CreateDir { path: p.into(), source: ioe() }).to_string(),
-            AppError::from(LogError::OpenFile { path: p.into(), source: ioe() }).to_string(),
+            ConfigError::Io {
+                path: p.into(),
+                source: ioe(),
+            }
+            .to_string(),
+            LogError::CreateDir {
+                path: p.into(),
+                source: ioe(),
+            }
+            .to_string(),
+            LogError::OpenFile {
+                path: p.into(),
+                source: ioe(),
+            }
+            .to_string(),
+            AppError::from(ConfigError::Io {
+                path: p.into(),
+                source: ioe(),
+            })
+            .to_string(),
+            AppError::from(LogError::CreateDir {
+                path: p.into(),
+                source: ioe(),
+            })
+            .to_string(),
+            AppError::from(LogError::OpenFile {
+                path: p.into(),
+                source: ioe(),
+            })
+            .to_string(),
         ];
         for s in errs {
             assert!(s.contains(p), "missing path in {s:?}");
@@ -389,10 +421,16 @@ mod error_tests {
 
     #[test]
     fn io_variants_include_underlying_message_and_chain_source() {
-        let e = ConfigError::Io { path: "/x/c.toml".into(), source: ioe() };
+        let e = ConfigError::Io {
+            path: "/x/c.toml".into(),
+            source: ioe(),
+        };
         assert!(e.to_string().contains("denied"));
         assert_eq!(e.source().unwrap().to_string(), "denied");
-        let l = LogError::OpenFile { path: "/x/l".into(), source: ioe() };
+        let l = LogError::OpenFile {
+            path: "/x/l".into(),
+            source: ioe(),
+        };
         assert_eq!(l.source().unwrap().to_string(), "denied");
         // AppError::Config delegates Display; source() is the inner error.
         let a = AppError::from(e);
@@ -408,9 +446,16 @@ mod error_tests {
     fn app_error_prefixes_and_not_implemented() {
         let c = AppError::from(parse("/p", 1, 2, "m")).to_string();
         assert!(c.starts_with("config: "), "{c}");
-        let l = AppError::from(LogError::OpenFile { path: "/p".into(), source: ioe() }).to_string();
+        let l = AppError::from(LogError::OpenFile {
+            path: "/p".into(),
+            source: ioe(),
+        })
+        .to_string();
         assert!(l.starts_with("logging: "), "{l}");
-        assert_eq!(AppError::NotImplemented("sync").to_string(), "not implemented: sync");
+        assert_eq!(
+            AppError::NotImplemented("sync").to_string(),
+            "not implemented: sync"
+        );
     }
 
     // Adversarial: paths show (even when they look sensitive); fields are
@@ -434,8 +479,18 @@ mod error_tests {
     fn empty_path_does_not_panic() {
         let s = parse("", 0, 0, "").to_string();
         assert!(s.contains("line 0, column 0"), "{s}");
-        let _ = ConfigError::Io { path: PathBuf::new(), source: ioe() }.to_string();
-        let _ = format!("{:?}", LogError::CreateDir { path: PathBuf::new(), source: ioe() });
+        let _ = ConfigError::Io {
+            path: PathBuf::new(),
+            source: ioe(),
+        }
+        .to_string();
+        let _ = format!(
+            "{:?}",
+            LogError::CreateDir {
+                path: PathBuf::new(),
+                source: ioe()
+            }
+        );
     }
 
     #[test]
