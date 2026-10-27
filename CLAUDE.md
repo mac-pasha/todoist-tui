@@ -2,12 +2,12 @@
 
 <!-- ===== PROJECT SECTION: fill per repo ===== -->
 ## Project
-- Name: web-scraper
-- Stack: <e.g. Laravel 11 API + Flutter (BLoC) app>
-- Run tests: `<e.g. php artisan test>` / `<flutter test>`
-- Lint: `<e.g. ./vendor/bin/pint --test>` / `<flutter analyze>`
-- Conventions: <folder layout, naming, error format, logging rules>
-- Never touch: <e.g. migrations already in prod, payment signing code>
+- Name: todoist-tui
+- Stack: Rust + ratatui/crossterm (TUI), tokio, reqwest (rustls), rusqlite, clap
+- Run tests: `cargo test --all`
+- Lint: `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` (identical to `.github/workflows/ci.yml`)
+- Conventions: modules live in `src/main.rs`, `src/cli/`, `src/config/`, `src/error.rs`, `src/log.rs`. All fallible signatures return the crate-wide `Result<T> = Result<T, AppError>` with `thiserror`-typed error enums in `src/error.rs`; `anyhow` is only allowed at the top of `main`. Secrets (API token, credentials) must never be formatted into logs directly — log them through the `Secret<T>` redaction helper in `src/log.rs` (`Display`/`Debug` render `***`; raw access only via the greppable `Secret::expose`).
+- Never touch: `Cargo.lock` pins, `rust-toolchain.toml`, and the redaction helper (`Secret`/`REDACTED`) in `src/log.rs`
 <!-- ===== END PROJECT SECTION ===== -->
 
 ## Agentic SDLC (mandatory workflow)
