@@ -1,0 +1,136 @@
+# CI for todoist-tui (T-008, EPIC-01).
+#
+# Triggers: push + pull_request against the repository's default branch,
+# ASSUMED to be `develop` — the lead must confirm the remote's actual default
+# branch and adjust the two `branches:` lists below if it differs (e.g. main).
+#
+# Job names (fmt, clippy, test, build) are stable/generic on purpose:
+# EPIC-12 extends these jobs later, so do not rename them.
+#
+# Toolchain policy: no version is hard-coded here. The pinned toolchain
+# (channel + components + profile) comes from rust-toolchain.toml in the repo
+# root, installed by actions-rust-lang/setup-rust-toolchain.
+name: ci
+
+# Quoted so YAML 1.1 parsers (e.g. PyYAML) also read it as the key "on".
+"on":
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui
+      # Lint policy lives in Cargo.toml [lints.*] + clippy.toml (T-002);
+      # warnings must not accumulate in CI, so deny them here.
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui
+      - run: cargo test --all
+
+  build:
+    name: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui
+      - run: cargo build --release
+
+  # Dedicated Linux proof that the workspace builds with ONLY the system
+  # packages installed below — i.e. no hidden host dependencies on a bare
+  # GitHub ubuntu-latest runner.
+  #
+  # Why these packages (verified 2026-11 against Cargo.lock, keyring 4.2.0):
+  #   keyring 4.2's Linux backend in this tree is
+  #   zbus-secret-service-keyring-store 1.0.1
+  #     -> secret-service 5.2.0  (default `crypto-rust`: pure-Rust crypto
+  #        aes/cbc/hkdf/sha2 — no libgcrypt, no OpenSSL)
+  #     -> zbus 5.19.0            (pure-Rust D-Bus implementation: speaks the
+  #        protocol itself via rustix/linux-raw-sys raw syscalls — it is NOT
+  #        a binding to the C libdbus library)
+  #   Cargo.lock confirms no *-sys crate in those subtrees links any C
+  #   library, so strictly speaking NONE of libdbus-1-dev / libsecret-1-dev
+  #   is a compile-time requirement of keyring 4.2's zbus backend.
+  #   They are installed here deliberately anyway:
+  #     1. They are the historically cited "keyring on Linux" package set
+  #        (needed by keyring <= 3.x / secret-service 2.x, which bound C
+  #        libdbus/libsecret). Installing them pins that assumption in code
+  #        instead of tribal knowledge.
+  #     2. If a future change flips the backend or crypto features (e.g.
+  #        secret-service's `dbus-secret-service` or `crypto-gcrypt`), the
+  #        requirement becomes real and this job already provides it — and
+  #        still proves the build on a runner with nothing else added.
+  #   pkg-config: genuinely declared by a build dependency in this tree
+  #   (libsqlite3-sys, pulled in by rusqlite's `bundled` feature) and is the
+  #   standard probe for system C libraries. The rest of the C toolchain
+  #   (cc/ar, via build-essential) ships preinstalled on ubuntu-latest.
+  #   Note: this proves COMPILE/LINK on bare Linux. Actually talking to a
+  #   secret store at RUNTIME would also need a D-Bus session bus + a
+  #   secret-service daemon (e.g. gnome-keyring); no test in this workspace
+  #   touches the real keychain, so none is provisioned.
+  linux-bare:
+    name: linux-bare-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install keyring-4.2 Linux system package set
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libdbus-1-dev \
+            libsecret-1-dev \
+            pkg-config
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui-linux-bare
+      - run: cargo build --release

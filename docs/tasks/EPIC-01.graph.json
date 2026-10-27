@@ -193,7 +193,7 @@
         "Workflow is verified green once on a pushed branch (run link pasted in the PR); a deliberately mis-formatted file makes the fmt step fail (verified once, then reverted)"
       ],
       "context": "Mirrors the local commands recorded in CLAUDE.md by T-009. EPIC-12 later adds integration/perf gate jobs - keep job names stable and generic (fmt, clippy, test, build) so they can be extended.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-009",
