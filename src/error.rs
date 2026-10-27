@@ -121,6 +121,32 @@ pub enum AuthError {
     /// A token was supplied that is empty or whitespace-only.
     #[error("the API token must not be empty")]
     EmptyToken,
+
+    /// A non-HTTPS base URL was supplied to the token-validation client
+    /// (T-106). Never constructed from user input containing the token.
+    #[error("refusing to validate the API token over a non-HTTPS URL")]
+    InsecureBaseUrl,
+
+    /// Building the HTTPS client, or sending the validation request,
+    /// failed at the transport level (DNS, TLS, timeout, connection
+    /// refused, ...). Carries the underlying `reqwest::Error`, which never
+    /// contains the token: it is sent via an `Authorization` header, never
+    /// interpolated into the request URL.
+    #[error("request to the Todoist API failed: {source}")]
+    Request {
+        /// Underlying HTTP client/transport error.
+        #[source]
+        source: reqwest::Error,
+    },
+
+    /// The Todoist API responded with a status this client does not
+    /// recognise as either "token accepted" (200) or "token rejected"
+    /// (401/403).
+    #[error("unexpected response from the Todoist API: HTTP {status}")]
+    UnexpectedStatus {
+        /// Raw HTTP status code returned by the API.
+        status: u16,
+    },
 }
 
 /// Errors raised while initialising the logging subsystem.
