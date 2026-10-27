@@ -19,4 +19,4 @@ pub mod validate;
 
 pub use source::{MemoryTokenSource, TokenSource};
 pub use token::Token;
-pub use validate::{validate as validate_token, DEFAULT_BASE_URL};
+pub use validate::{check, check_blocking, DEFAULT_BASE_URL};

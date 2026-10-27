@@ -147,6 +147,16 @@ pub enum AuthError {
         /// Raw HTTP status code returned by the API.
         status: u16,
     },
+
+    /// [`crate::auth::validate::check_blocking`] could not build the
+    /// current-thread Tokio runtime it uses to drive the async
+    /// [`crate::auth::validate::check`] call from sync code.
+    #[error("failed to start the async runtime for token validation: {source}")]
+    Runtime {
+        /// Underlying Tokio runtime-build error.
+        #[source]
+        source: io::Error,
+    },
 }
 
 /// Errors raised while initialising the logging subsystem.

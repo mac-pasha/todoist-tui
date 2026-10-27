@@ -1,13 +1,20 @@
 //! Token validation against the real Todoist API (T-106, EPIC-02).
 //!
-//! [`validate`] calls a lightweight authenticated Todoist REST endpoint
-//! (`GET /api/v1/user`, which echoes the current user for a valid token)
-//! over HTTPS-only `reqwest` (rustls, see `Cargo.toml` — no native-tls/
-//! OpenSSL, REQ-001) and maps the response to [`crate::error::AuthError`]:
-//! a 2xx response means the token is accepted, 401/403 means it was
-//! rejected, and anything else (network failure, unexpected status) is
-//! surfaced as a distinct error so callers can tell "your token is wrong"
-//! apart from "we could not reach Todoist".
+//! [`check`] calls a lightweight authenticated Todoist Sync API endpoint
+//! (`POST /api/v1/sync` with `sync_token="*"` and `resource_types=["user"]`,
+//! which is the cheapest authenticated sync call that still requires a
+//! valid token) over HTTPS-only `reqwest` (rustls, see `Cargo.toml` — no
+//! native-tls/OpenSSL, REQ-001) and maps the response to
+//! [`crate::error::AuthError`]: a 2xx response means the token is accepted,
+//! 401/403 means it was rejected, and anything else (network failure,
+//! unexpected status) is surfaced as a distinct error so callers can tell
+//! "your token is wrong" apart from "we could not reach Todoist".
+//!
+//! This module is intentionally minimal: a single request, no retries, no
+//! rate-limit handling, no parsing of the sync response body, no domain
+//! model. **EPIC-03 owns the real typed Sync API client** (with retries,
+//! backoff, and full resource parsing) and supersedes this validator for
+//! anything beyond "is this token accepted".
 //!
 //! The token is only ever read through [`Token::expose`] when building the
 //! `Authorization` header; it is never formatted into a log line, an error
@@ -16,30 +23,38 @@
 //!
 //! The base URL is an injectable parameter (not a constant) so tests can
 //! point at a local mock server instead of the real Todoist API — this
-//! module itself makes no real network calls in its own tests, it only
-//! exercises the pure HTTPS-enforcement / URL-building logic.
+//! module's own `tests`/`unit_tests` modules make no real network calls,
+//! they only exercise the pure HTTPS-enforcement / URL-building logic and
+//! transport-level failure modes that a mock HTTP server cannot simulate
+//! (TLS downgrade attempts); the `wiremock_tests` module below covers the
+//! HTTP status-mapping contract with a local mock server.
 
 use reqwest::{Client, StatusCode};
 
 use crate::auth::Token;
 use crate::error::{AuthError, Result};
 
-/// Default Todoist API base URL used by [`validate`].
+/// Default Todoist API base URL used by [`check`].
 ///
-/// A lightweight authenticated endpoint: `GET {base}/api/v1/user` returns
-/// the current user for a valid token and 401 for an invalid one, without
-/// requiring any request body or pulling the user's full task list. (The
-/// older `/sync/v9/user` and `/rest/v2/*` endpoints are deprecated and now
-/// return HTTP 410 Gone for every request, valid token or not.)
+/// `POST {base}/api/v1/sync` is the cheapest authenticated Sync API call:
+/// requesting only the `user` resource with no incremental state (`"*"`)
+/// returns a small payload for a valid token and 401/403 for an invalid
+/// one. (The older `/sync/v9/*` and `/rest/v2/*` endpoints are deprecated
+/// and return HTTP 410 Gone for every request, valid token or not.)
 pub const DEFAULT_BASE_URL: &str = "https://api.todoist.com";
+
+/// Request timeout applied to the single validation request (T-106 MAJOR
+/// finding: named instead of a bare literal so the budget is documented and
+/// reusable).
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Validates `token` against the Todoist API reachable at `base_url`.
 ///
 /// `base_url` must use the `https://` scheme; any other scheme (including
 /// plain `http://`) is rejected before any network activity happens, so a
 /// misconfigured or attacker-controlled base URL can never cause the token
-/// to be sent in the clear. Tests inject a local HTTPS mock server's URL
-/// here instead of [`DEFAULT_BASE_URL`].
+/// to be sent in the clear. Tests inject a local mock server's URL here
+/// instead of [`DEFAULT_BASE_URL`].
 ///
 /// # Errors
 ///
@@ -51,22 +66,40 @@ pub const DEFAULT_BASE_URL: &str = "https://api.todoist.com";
 ///   unauthorized (HTTP 401 or 403).
 /// - [`AuthError::UnexpectedStatus`] if the API returned any other
 ///   non-success status.
-pub async fn validate(token: &Token, base_url: &str) -> Result<()> {
+pub async fn check(token: &Token, base_url: &str) -> Result<()> {
     if !base_url.starts_with("https://") {
         return Err(AuthError::InsecureBaseUrl.into());
     }
 
     let client = Client::builder()
         .https_only(true)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|source| AuthError::Request { source })?;
 
-    let url = format!("{base_url}/api/v1/user");
+    send_and_map(&client, token, base_url).await
+}
+
+/// Sends the single sync-API validation request and maps its outcome to
+/// [`Result<()>`], without enforcing the `https://` scheme gate or building
+/// the client — that is [`check`]'s job.
+///
+/// Split out purely so the `wiremock_tests` module below can exercise the
+/// HTTP status-mapping contract (2xx/401/403/other) against a real local
+/// mock server: `wiremock` has no TLS support (it only ever serves plain
+/// `http://`), so a test going through the public, https-only [`check`]
+/// would always fail at the scheme gate before reaching this logic. The
+/// scheme gate itself is unit-tested separately (see `tests` and
+/// `unit_tests` above) and is completely unaffected by this split — `check`
+/// still runs it unconditionally before any client is built or request
+/// sent.
+async fn send_and_map(client: &Client, token: &Token, base_url: &str) -> Result<()> {
+    let url = format!("{base_url}/api/v1/sync");
 
     let response = client
-        .get(url)
+        .post(url)
         .bearer_auth(token.expose())
+        .form(&[("sync_token", "*"), ("resource_types", r#"["user"]"#)])
         .send()
         .await
         .map_err(|source| AuthError::Request { source })?;
@@ -79,6 +112,26 @@ pub async fn validate(token: &Token, base_url: &str) -> Result<()> {
         }
         .into()),
     }
+}
+
+/// Blocking wrapper around [`check`] for sync call sites (the T-107 CLI
+/// path) that do not already run inside a Tokio runtime.
+///
+/// Builds a dedicated current-thread runtime for the single request and
+/// tears it down afterwards; it does not reuse or require an ambient
+/// runtime.
+///
+/// # Errors
+///
+/// - [`AuthError::Runtime`] if the current-thread Tokio runtime could not
+///   be built.
+/// - Any error [`check`] can return (see its docs).
+pub fn check_blocking(token: &Token, base_url: &str) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|source| AuthError::Runtime { source })?;
+    runtime.block_on(check(token, base_url))
 }
 
 #[cfg(test)]
@@ -95,7 +148,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_plain_http_base_url_without_any_network_call() {
         let token = Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty token");
-        let err = validate(&token, "http://api.todoist.com")
+        let err = check(&token, "http://api.todoist.com")
             .await
             .expect_err("http:// must be rejected");
         assert!(matches!(
@@ -108,7 +161,7 @@ mod tests {
     async fn rejects_non_https_schemes_and_scheme_less_hosts() {
         let token = Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty token");
         for bad in ["ftp://api.todoist.com", "api.todoist.com", ""] {
-            let err = validate(&token, bad)
+            let err = check(&token, bad)
                 .await
                 .expect_err("non-https base URL must be rejected");
             assert!(matches!(
@@ -134,14 +187,10 @@ mod tests {
 /// error renderings, malformed-`https://`-prefixed inputs, and the
 /// Display/Debug contract of the new error variants.
 ///
-/// NOT coverable here without a new dev-dependency: HTTP status mapping
-/// (2xx → Ok, 401/403 → `InvalidToken`, other → `UnexpectedStatus`). Feeding
-/// real responses into `validate` requires terminating TLS, and the crate
-/// has no TLS server implementation available (no `[dev-dependencies]`
-/// exist; rustls is only a transitive dep and a from-scratch TLS server in
-/// std is infeasible). Wiring a `wiremock`/`httpmock` dev-dep or injecting
-/// the `reqwest::Client` is left to a follow-up task — the mapping itself
-/// is verified by code review against the task spec.
+/// HTTP status mapping (2xx → Ok, 401/403 → `InvalidToken`, other →
+/// `UnexpectedStatus`) is covered separately in the `wiremock_tests` module
+/// below, which runs a local plaintext HTTP mock server via the `wiremock`
+/// dev-dependency rather than the raw-TCP/TLS fixtures used here.
 #[cfg(test)]
 mod unit_tests {
     use std::io::{self, Write};
@@ -238,7 +287,7 @@ mod unit_tests {
         let server = spawn_server(ServerScript::Close, Duration::from_millis(300));
         let http_base = server.base_url.replacen("https://", "http://", 1);
 
-        let err = validate(&token, &http_base)
+        let err = check(&token, &http_base)
             .await
             .expect_err("http:// base URL must be rejected");
         assert!(
@@ -253,7 +302,7 @@ mod unit_tests {
         std::thread::sleep(Duration::from_millis(150));
         assert!(
             !server.accepted.load(Ordering::SeqCst),
-            "validate() must not open a socket for a non-https base URL"
+            "check() must not open a socket for a non-https base URL"
         );
         server.handle.join().expect("server thread must finish");
     }
@@ -278,7 +327,7 @@ mod unit_tests {
             "api.todoist.com",
             "",
         ] {
-            match validate(&token, bad).await {
+            match check(&token, bad).await {
                 Err(AppError::Auth(AuthError::InsecureBaseUrl)) => {}
                 other => panic!("base URL {bad:?} should be InsecureBaseUrl, got {other:?}"),
             }
@@ -305,7 +354,7 @@ mod unit_tests {
             "https:// api.todoist.com",
             "https://api.todoist.com:<not-a-port>",
         ] {
-            match validate(&token, bad).await {
+            match check(&token, bad).await {
                 Err(AppError::Auth(AuthError::Request { .. })) => {}
                 other => panic!("malformed base {bad:?} should be Request, got {other:?}"),
             }
@@ -320,7 +369,7 @@ mod unit_tests {
         let token = fixture_token();
         let server = spawn_server(ServerScript::Close, Duration::from_secs(5));
 
-        let err = validate(&token, &server.base_url)
+        let err = check(&token, &server.base_url)
             .await
             .expect_err("connection closed mid-handshake must fail");
         server.handle.join().expect("server thread must finish");
@@ -338,14 +387,14 @@ mod unit_tests {
     #[tokio::test]
     async fn plaintext_http_response_cannot_fake_a_200_over_https() {
         // Downgrade/MITM scenario: the server answers with a fully valid
-        // plaintext "HTTP/1.1 200 OK". Because validate() is pinned to
+        // plaintext "HTTP/1.1 200 OK". Because check() is pinned to
         // https (scheme gate + https_only client + TLS), those bytes must
         // fail TLS record parsing — the result is a transport error, never
         // Ok(()). A plaintext mock can never impersonate the API.
         let token = fixture_token();
         let server = spawn_server(ServerScript::Plaintext200, Duration::from_secs(5));
 
-        let err = validate(&token, &server.base_url)
+        let err = check(&token, &server.base_url)
             .await
             .expect_err("plaintext response must fail the TLS layer");
         server.handle.join().expect("server thread must finish");
@@ -375,7 +424,7 @@ mod unit_tests {
             server.base_url.trim_start_matches("https://")
         );
 
-        let err = validate(&token, &collapsed)
+        let err = check(&token, &collapsed)
             .await
             .expect_err("slash-collapsed https URL must still require TLS");
         server.handle.join().expect("server thread must finish");
@@ -391,26 +440,22 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn request_url_targets_a_live_todoist_endpoint_and_carries_no_token() {
-        // BUG-DEMONSTRATING TEST (expected to fail until the endpoint is
-        // fixed — see the unit-test report). reqwest error renderings embed
-        // the request URL, so this asserts two things at once:
+    async fn request_url_targets_the_live_sync_endpoint_and_carries_no_token() {
+        // reqwest error renderings embed the request URL, so this asserts
+        // two things at once:
         //
-        // 1. SECURITY (passes today): the token is nowhere in the URL — it
-        //    travels only in the Authorization header.
-        // 2. CORRECTNESS (fails today): the requested path must be a
-        //    *live* Todoist endpoint. Observed 2026-10-28 against
-        //    https://api.todoist.com: GET /sync/v9/user returns
-        //    "410 This endpoint is deprecated" for every caller, valid
-        //    token or not, so `validate` can never return Ok against the
-        //    real API. The current API surface is /api/v1/ (GET
-        //    /api/v1/user returns 401 without auth — exists and is
-        //    auth-gated). Until the hardcoded path moves to /api/v1/user,
-        //    this assertion keeps failing.
+        // 1. SECURITY: the token is nowhere in the URL — it travels only in
+        //    the Authorization header.
+        // 2. CORRECTNESS: the requested path is the live, auth-gated
+        //    `/api/v1/sync` endpoint. Verified against the real API
+        //    (`curl -X POST https://api.todoist.com/api/v1/sync`): no auth
+        //    returns 403, an invalid `Authorization: Bearer` token returns
+        //    401 with a JSON `AUTH_INVALID_TOKEN` body — the older
+        //    `/sync/v9/*` and `/rest/v2/*` surfaces return 410 Gone instead.
         let token = fixture_token();
         let server = spawn_server(ServerScript::Close, Duration::from_secs(5));
 
-        let err = validate(&token, &server.base_url)
+        let err = check(&token, &server.base_url)
             .await
             .expect_err("transport error expected");
         server.handle.join().expect("server thread must finish");
@@ -421,9 +466,8 @@ mod unit_tests {
             "mock host missing from error renderings: {renderings}"
         );
         assert!(
-            renderings.contains("/api/v1/user"),
-            "validate() must target the live /api/v1/user endpoint, but the \
-             requested path is the 410-deprecated /sync/v9 one: {renderings}"
+            renderings.contains("/api/v1/sync"),
+            "check() must target the live /api/v1/sync endpoint: {renderings}"
         );
         assert!(
             !renderings.contains(FAKE_TOKEN),
@@ -476,21 +520,198 @@ mod unit_tests {
     #[test]
     fn default_base_url_is_exact_todoist_endpoint_no_trailing_slash() {
         // Exact pin: scheme https, official host, no trailing slash — a
-        // trailing slash would join into `//api/v1/user` (double slash),
+        // trailing slash would join into `//api/v1/sync` (double slash),
         // so the produced URL is exactly
-        // https://api.todoist.com/api/v1/user.
+        // https://api.todoist.com/api/v1/sync.
         assert_eq!(DEFAULT_BASE_URL, "https://api.todoist.com");
         assert!(!DEFAULT_BASE_URL.ends_with('/'));
     }
 
     #[tokio::test]
-    async fn mod_reexport_validate_token_shares_the_https_gate() {
+    async fn mod_reexport_check_shares_the_https_gate() {
         // The re-export from `auth` must behave identically (the name the
         // CLI/T-107 will actually call).
         let token = fixture_token();
         assert!(matches!(
-            crate::auth::validate_token(&token, "gopher://api.todoist.com").await,
+            crate::auth::check(&token, "gopher://api.todoist.com").await,
             Err(AppError::Auth(AuthError::InsecureBaseUrl))
         ));
+    }
+}
+
+/// HTTP status-mapping coverage (T-106) using `wiremock` for a real local
+/// HTTP mock server, complementing the TLS/transport-level fixtures in
+/// `unit_tests` above. Minimal sanity coverage only; broader adversarial
+/// cases are left to the unit-tester.
+///
+/// These tests call the private [`send_and_map`] helper directly against
+/// `mock_server.uri()` rather than the public, https-only [`check`]:
+/// `wiremock` has no TLS support (it only serves plain `http://`), so
+/// `check`'s scheme gate would reject every wiremock URL before the request
+/// was ever sent, making the HTTP status-mapping contract impossible to
+/// exercise through the public entry point. This is a `wiremock` tooling
+/// limitation, not a gap in the real security gate — that gate has its own
+/// dedicated, always-passing coverage in `tests`/`unit_tests` above, and
+/// `check` itself is unchanged: it still runs the gate unconditionally
+/// before delegating to `send_and_map`.
+#[cfg(test)]
+mod wiremock_tests {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::*;
+    use crate::error::AppError;
+
+    /// Fake, never-real token fixture used for the Authorization-header
+    /// assertion (per the acceptance wording, the literal `tok_fake_abc123`
+    /// value).
+    const FIXTURE_TOKEN: &str = "tok_fake_abc123";
+
+    fn fixture_token() -> Token {
+        Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty fake token")
+    }
+
+    #[tokio::test]
+    async fn success_status_maps_to_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sync"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let token = fixture_token();
+        let result = send_and_map(&Client::new(), &token, &server.uri()).await;
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[tokio::test]
+    async fn unauthorized_status_maps_to_invalid_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sync"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let token = fixture_token();
+        let err = send_and_map(&Client::new(), &token, &server.uri())
+            .await
+            .expect_err("401 must be rejected");
+        assert!(
+            matches!(err, AppError::Auth(AuthError::InvalidToken)),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn server_error_status_does_not_map_to_invalid_token() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sync"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let token = fixture_token();
+        let err = send_and_map(&Client::new(), &token, &server.uri())
+            .await
+            .expect_err("500 must be an error");
+        assert!(
+            !matches!(err, AppError::Auth(AuthError::InvalidToken)),
+            "a 5xx backend failure must not be reported as an invalid token, got {err:?}"
+        );
+        assert!(
+            matches!(
+                err,
+                AppError::Auth(AuthError::UnexpectedStatus { status: 500 })
+            ),
+            "expected UnexpectedStatus{{status: 500}}, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn request_carries_exactly_one_bearer_authorization_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sync"))
+            .and(header(
+                "Authorization",
+                format!("Bearer {FIXTURE_TOKEN}").as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let token = fixture_token();
+        send_and_map(&Client::new(), &token, &server.uri())
+            .await
+            .expect("request matching the expected Authorization header must succeed");
+
+        let requests = server.received_requests().await.expect("requests recorded");
+        assert_eq!(requests.len(), 1, "exactly one request must be sent");
+        let auth_headers: Vec<_> = requests[0]
+            .headers
+            .get_all("Authorization")
+            .iter()
+            .collect();
+        assert_eq!(
+            auth_headers.len(),
+            1,
+            "exactly one Authorization header must be sent, got {auth_headers:?}"
+        );
+        assert_eq!(auth_headers[0], format!("Bearer {FIXTURE_TOKEN}").as_str());
+    }
+
+    #[tokio::test]
+    async fn request_carries_sync_token_and_resource_types_form_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sync"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let token = fixture_token();
+        send_and_map(&Client::new(), &token, &server.uri())
+            .await
+            .expect("mocked 200 must succeed");
+
+        let requests = server.received_requests().await.expect("requests recorded");
+        assert_eq!(requests.len(), 1);
+        let body = String::from_utf8(requests[0].body.clone()).expect("utf8 form body");
+        assert!(
+            body.contains("sync_token=*") || body.contains("sync_token=%2A"),
+            "form body must carry sync_token=*: {body}"
+        );
+        assert!(
+            body.contains("resource_types"),
+            "form body must carry resource_types: {body}"
+        );
+        assert!(
+            body.contains("user"),
+            "form body must request the user resource: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_token_material_leaks_into_error_debug_or_display() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/sync"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let token = fixture_token();
+        let err = send_and_map(&Client::new(), &token, &server.uri())
+            .await
+            .expect_err("500 must be an error");
+
+        let renderings = format!("{err}\n{err:?}\n{err:#?}");
+        assert!(
+            !renderings.contains(FIXTURE_TOKEN),
+            "token leaked into an error rendering: {renderings}"
+        );
     }
 }
