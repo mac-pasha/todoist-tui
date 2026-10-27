@@ -69,7 +69,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Pure types, no IO. thiserror for library-style typed errors, anyhow only at the top of main. These variants are extended by later epics (ApiError, StoreError) - keep the enum non_exhaustive-friendly and the module free of domain logic.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-004",

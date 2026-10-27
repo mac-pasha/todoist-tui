@@ -3,6 +3,9 @@
 //! Bootstrap task T-001: sets up the crate and the pinned dependency stack
 //! only. UI, sync, storage and config modules arrive in later tasks.
 
+/// Typed error hierarchy and crate-wide `Result` alias (T-003).
+mod error;
+
 fn main() {
     println!("todoist-tui bootstrap placeholder (T-001)");
 }
@@ -286,6 +289,9 @@ mod bootstrap_tests {
             // Ignore this test module's own declaration; acceptance asks
             // that the placeholder crate declares no production modules.
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
+            // T-003 acceptance item 5 requires `mod error;`. The only other
+            // permitted line is the cfg(test) `error_tests` module below.
+            .filter(|l| *l != "mod error;" && !l.starts_with("mod error_tests"))
             .map(str::to_string)
             .collect();
         assert!(
@@ -331,5 +337,140 @@ mod bootstrap_tests {
             "Cargo.lock must be committed (git ls-files --error-unmatch Cargo.lock failed: {})",
             String::from_utf8_lossy(&out.stderr)
         );
+    }
+}
+
+/// Unit tests for `error.rs` (T-003). Kept here because `error.rs` is
+/// production code that the tester must not edit.
+#[cfg(test)]
+mod error_tests {
+    use crate::error::{AppError, ConfigError, LogError, Result};
+    use std::error::Error as _;
+    use std::io;
+    use std::path::PathBuf;
+
+    fn ioe() -> io::Error {
+        io::Error::new(io::ErrorKind::PermissionDenied, "denied")
+    }
+
+    fn parse(path: &str, line: usize, col: usize, msg: &str) -> ConfigError {
+        ConfigError::Parse { path: PathBuf::from(path), line, column: col, message: msg.into() }
+    }
+
+    // Acceptance 4
+    #[test]
+    fn app_error_from_parse_contains_path_and_line() {
+        let e = AppError::from(parse("/tmp/fake/config.toml", 42, 7, "bad key"));
+        let s = e.to_string();
+        assert!(s.contains("/tmp/fake/config.toml"), "{s}");
+        assert!(s.contains("42"), "{s}");
+        assert!(s.contains('7'), "{s}");
+        assert!(s.contains("bad key"), "{s}");
+        assert!(matches!(e, AppError::Config(ConfigError::Parse { line: 42, .. })));
+    }
+
+    // Acceptance 3
+    #[test]
+    fn every_file_variant_display_includes_path() {
+        let p = "/fake/dir/file.x";
+        let errs: Vec<String> = vec![
+            parse(p, 1, 1, "m").to_string(),
+            ConfigError::Io { path: p.into(), source: ioe() }.to_string(),
+            LogError::CreateDir { path: p.into(), source: ioe() }.to_string(),
+            LogError::OpenFile { path: p.into(), source: ioe() }.to_string(),
+            AppError::from(ConfigError::Io { path: p.into(), source: ioe() }).to_string(),
+            AppError::from(LogError::CreateDir { path: p.into(), source: ioe() }).to_string(),
+            AppError::from(LogError::OpenFile { path: p.into(), source: ioe() }).to_string(),
+        ];
+        for s in errs {
+            assert!(s.contains(p), "missing path in {s:?}");
+        }
+    }
+
+    #[test]
+    fn io_variants_include_underlying_message_and_chain_source() {
+        let e = ConfigError::Io { path: "/x/c.toml".into(), source: ioe() };
+        assert!(e.to_string().contains("denied"));
+        assert_eq!(e.source().unwrap().to_string(), "denied");
+        let l = LogError::OpenFile { path: "/x/l".into(), source: ioe() };
+        assert_eq!(l.source().unwrap().to_string(), "denied");
+        // AppError::Config delegates Display; source() is the inner error.
+        let a = AppError::from(e);
+        assert!(a.source().is_some());
+    }
+
+    #[test]
+    fn parse_variant_has_no_source() {
+        assert!(parse("/p", 1, 1, "m").source().is_none());
+    }
+
+    #[test]
+    fn app_error_prefixes_and_not_implemented() {
+        let c = AppError::from(parse("/p", 1, 2, "m")).to_string();
+        assert!(c.starts_with("config: "), "{c}");
+        let l = AppError::from(LogError::OpenFile { path: "/p".into(), source: ioe() }).to_string();
+        assert!(l.starts_with("logging: "), "{l}");
+        assert_eq!(AppError::NotImplemented("sync").to_string(), "not implemented: sync");
+    }
+
+    // Adversarial: paths show (even when they look sensitive); fields are
+    // structurally only PathBuf/usize/io::Error/Parser message -- no variant
+    // has a dedicated secret/token field (verified by code inspection).
+    #[test]
+    fn sensitive_looking_path_is_displayed_and_debugged() {
+        let p = "/home/u/token/secret.toml";
+        let e = AppError::from(parse(p, 3, 4, "m"));
+        assert!(e.to_string().contains("token"));
+        assert!(format!("{e:?}").contains(p));
+    }
+
+    #[test]
+    fn display_does_not_include_debug_struct_noise() {
+        let s = AppError::from(parse("/p", 1, 1, "m")).to_string();
+        assert!(!s.contains("Parse {") && !s.contains("PathBuf"), "{s}");
+    }
+
+    #[test]
+    fn empty_path_does_not_panic() {
+        let s = parse("", 0, 0, "").to_string();
+        assert!(s.contains("line 0, column 0"), "{s}");
+        let _ = ConfigError::Io { path: PathBuf::new(), source: ioe() }.to_string();
+        let _ = format!("{:?}", LogError::CreateDir { path: PathBuf::new(), source: ioe() });
+    }
+
+    #[test]
+    fn very_long_message_is_preserved_untruncated() {
+        let msg = "x".repeat(100_000);
+        let s = parse("/p", usize::MAX, usize::MAX, &msg).to_string();
+        assert!(s.contains(&msg));
+        assert!(s.contains(&usize::MAX.to_string()));
+    }
+
+    #[test]
+    fn path_with_spaces_and_unicode_renders() {
+        let s = parse("/tmp/мой конфиг/c o.toml", 1, 1, "m").to_string();
+        assert!(s.contains("/tmp/мой конфиг/c o.toml"), "{s}");
+    }
+
+    #[test]
+    fn result_alias_propagates_with_question_mark() {
+        fn inner() -> std::result::Result<(), ConfigError> {
+            Err(parse("/p", 9, 1, "m"))
+        }
+        fn outer() -> Result<()> {
+            inner()?;
+            Ok(())
+        }
+        let e = outer().unwrap_err();
+        assert!(matches!(e, AppError::Config(_)));
+        assert!(e.to_string().contains("line 9"));
+    }
+
+    #[test]
+    fn errors_are_send_sync_static() {
+        fn assert_traits<T: std::error::Error + Send + Sync + 'static>() {}
+        assert_traits::<AppError>();
+        assert_traits::<ConfigError>();
+        assert_traits::<LogError>();
     }
 }
