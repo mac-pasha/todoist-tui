@@ -24,7 +24,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Reuse the existing redaction helper `crate::log::Secret<T>` (Display/Debug already render `***`, raw access via `Secret::expose`) rather than writing new redaction. Follow the error style in `src/error.rs` (T-003): thiserror enums, `#[non_exhaustive]`, every file-touching variant carries its `PathBuf`. Keep `#![allow(dead_code)]` at module scope like `error.rs`/`config/paths.rs` do, since consumers land in later tasks of this epic. No IO and no network in this task.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-102",
