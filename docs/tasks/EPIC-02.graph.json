@@ -95,7 +95,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Reuse `crate::config::paths` conventions (T-004): pure functions reading env at call time, `ConfigError::Io { path, source }` on failure; add the new constant next to `CONFIG_FILE_NAME`/`LOG_FILE_NAME`. REQ-001 NFR requires 0600 for the fallback token file. Tests must use a temp dir via `FileTokenSource::at`, never the real user config dir; env-mutating tests in `paths.rs` already serialize with a mutex - follow that pattern.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-105",
