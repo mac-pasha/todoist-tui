@@ -43,6 +43,10 @@ pub enum AppError {
     /// (T-007 maps this to a stderr message and exit code 1).
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
+
+    /// Authentication / API token handling failed.
+    #[error("auth: {0}")]
+    Auth(#[from] AuthError),
 }
 
 /// Errors raised while loading the TOML config file.
@@ -76,6 +80,47 @@ pub enum ConfigError {
         /// Underlying OS error.
         source: io::Error,
     },
+}
+
+/// Errors raised while authenticating against the Todoist API / handling
+/// the stored API token (EPIC-02).
+///
+/// No variant here may carry raw token material: every field is either unit,
+/// a [`PathBuf`], an [`io::Error`], or an opaque backend error. The token
+/// itself only ever lives inside [`crate::auth::Token`] (a
+/// `crate::log::Secret<String>`), which this enum never wraps.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum AuthError {
+    /// No token is available (not stored yet, or removed).
+    #[error("not authenticated: no API token is stored")]
+    NotAuthenticated,
+
+    /// The stored or supplied token was rejected (malformed, or the API
+    /// reported it as invalid/expired).
+    #[error("the API token is invalid")]
+    InvalidToken,
+
+    /// The OS credential store (keyring) failed.
+    #[error("keyring backend failed: {source}")]
+    Backend {
+        /// Underlying keyring/OS error. Never constructed from token bytes.
+        #[source]
+        source: keyring::Error,
+    },
+
+    /// Reading/writing a token-related file failed at the OS level.
+    #[error("token file I/O failed for {path}: {source}")]
+    Io {
+        /// File that could not be read/written.
+        path: PathBuf,
+        /// Underlying OS error.
+        source: io::Error,
+    },
+
+    /// A token was supplied that is empty or whitespace-only.
+    #[error("the API token must not be empty")]
+    EmptyToken,
 }
 
 /// Errors raised while initialising the logging subsystem.

@@ -17,6 +17,10 @@ mod log;
 /// Clap CLI surface and subcommand stubs (T-007).
 mod cli;
 
+/// API token handling: the `Token` newtype wrapping `log::Secret` (T-101,
+/// EPIC-02).
+mod auth;
+
 use std::process::ExitCode;
 
 use config::Config;
@@ -340,13 +344,15 @@ mod bootstrap_tests {
             // that the placeholder crate declares no production modules.
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
             // T-003 requires `mod error;`, T-004 requires `mod config;`,
-            // T-006 requires `mod log;`, T-007 requires `mod cli;`. The only
-            // other permitted lines are the cfg(test) modules below.
+            // T-006 requires `mod log;`, T-007 requires `mod cli;`, T-101
+            // requires `mod auth;`. The only other permitted lines are the
+            // cfg(test) modules below.
             .filter(|l| {
                 *l != "mod error;"
                     && *l != "mod config;"
                     && *l != "mod log;"
                     && *l != "mod cli;"
+                    && *l != "mod auth;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)
@@ -584,5 +590,52 @@ mod error_tests {
         assert_traits::<AppError>();
         assert_traits::<ConfigError>();
         assert_traits::<LogError>();
+    }
+
+    // T-101 acceptance 2: adversarial proof that no `AuthError` variant can
+    // leak raw token material through `{}` or `{:?}`. The fixture value
+    // below is a fake token string, never a real credential.
+    #[test]
+    fn auth_error_variants_never_render_token_material() {
+        use crate::error::AuthError;
+
+        const FIXTURE_TOKEN: &str = "tok_fake_abc123";
+
+        // Note: the `Io` variant legitimately renders its `path` field (by
+        // design, same as `ConfigError::Io`); the path below deliberately
+        // does NOT embed the fixture token so this test proves no variant
+        // leaks token *material* specifically, not that paths are hidden.
+        let p = PathBuf::from("/home/u/.config/todoist-tui/token");
+        let variants: Vec<AuthError> = vec![
+            AuthError::NotAuthenticated,
+            AuthError::InvalidToken,
+            AuthError::Backend {
+                source: keyring::Error::NoEntry,
+            },
+            AuthError::Io {
+                path: p,
+                source: ioe(),
+            },
+            AuthError::EmptyToken,
+        ];
+        for v in &variants {
+            let disp = v.to_string();
+            let dbg = format!("{v:?}");
+            assert!(
+                !disp.contains(FIXTURE_TOKEN),
+                "Display leaked fixture token: {disp:?}"
+            );
+            assert!(
+                !dbg.contains(FIXTURE_TOKEN),
+                "Debug leaked fixture token: {dbg:?}"
+            );
+        }
+
+        // `AppError::Auth` renders with the documented "auth: " prefix and
+        // still never leaks the fixture token via either formatter.
+        let wrapped = AppError::from(AuthError::InvalidToken);
+        assert!(wrapped.to_string().starts_with("auth: "), "{wrapped}");
+        assert!(!wrapped.to_string().contains(FIXTURE_TOKEN));
+        assert!(!format!("{wrapped:?}").contains(FIXTURE_TOKEN));
     }
 }
