@@ -69,7 +69,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "`keyring = \"4.2\"` is already in Cargo.toml (Linux: secret-service via zbus, macOS: keychain). Do not add dependencies - if the mock store needs a feature flag that is not enabled, stop and report instead of editing Cargo.toml (it is outside this task's files). Risk called out in the epic: headless Linux has no secret-service, so `is_available()` must be a real probe, not an `cfg!(target_os)` guess. Never log the token; log only `describe()` and error kinds.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-104",
@@ -95,7 +95,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Reuse `crate::config::paths` conventions (T-004): pure functions reading env at call time, `ConfigError::Io { path, source }` on failure; add the new constant next to `CONFIG_FILE_NAME`/`LOG_FILE_NAME`. REQ-001 NFR requires 0600 for the fallback token file. Tests must use a temp dir via `FileTokenSource::at`, never the real user config dir; env-mutating tests in `paths.rs` already serialize with a mutex - follow that pattern.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-105",
