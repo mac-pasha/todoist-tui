@@ -120,7 +120,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean and `cargo test --all` passes"
       ],
       "context": "This is the single entry point every other command uses (`sync`/`add`/`today` in T-109, `logout` in T-108). Epic risk: headless Linux without secret-service is the common case, so the fallback path must be first-class and fully unit-tested via `with_sources`. The user-visible notice text is printed by the `auth` command (T-107), not here - this task only produces the string.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-106",

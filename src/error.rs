@@ -93,7 +93,7 @@ pub enum ConfigError {
 #[derive(Debug, Error)]
 pub enum AuthError {
     /// No token is available (not stored yet, or removed).
-    #[error("not authenticated: no API token is stored")]
+    #[error("not authenticated: no API token is stored; run `todoist-tui auth` to add one")]
     NotAuthenticated,
 
     /// The stored or supplied token was rejected (malformed, or the API
