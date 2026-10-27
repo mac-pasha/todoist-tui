@@ -407,7 +407,7 @@ mod bootstrap_tests {
 /// production code that the tester must not edit.
 #[cfg(test)]
 mod error_tests {
-    use crate::error::{AppError, ConfigError, LogError, Result};
+    use crate::error::{AppError, AuthError, ConfigError, LogError, Result};
     use std::error::Error as _;
     use std::io;
     use std::path::PathBuf;
@@ -637,5 +637,168 @@ mod error_tests {
         assert!(wrapped.to_string().starts_with("auth: "), "{wrapped}");
         assert!(!wrapped.to_string().contains(FIXTURE_TOKEN));
         assert!(!format!("{wrapped:?}").contains(FIXTURE_TOKEN));
+    }
+
+    // ---- T-101 extended coverage (unit-tester) ----
+
+    /// Every `AuthError` variant, with benign (non-secret) payloads.
+    fn auth_variants() -> Vec<AuthError> {
+        vec![
+            AuthError::NotAuthenticated,
+            AuthError::InvalidToken,
+            AuthError::Backend {
+                source: keyring::Error::NoEntry,
+            },
+            AuthError::Io {
+                path: PathBuf::from("/home/fake/.config/todoist-tui/token"),
+                source: ioe(),
+            },
+            AuthError::EmptyToken,
+        ]
+    }
+
+    #[test]
+    fn auth_error_each_variant_display_carries_expected_context() {
+        // Unit variants keep their full message; Backend wraps its source's
+        // message; Io names the offending file path and the OS error.
+        assert!(AuthError::NotAuthenticated
+            .to_string()
+            .contains("not authenticated"));
+        assert!(AuthError::NotAuthenticated
+            .to_string()
+            .contains("no API token is stored"));
+        assert!(AuthError::InvalidToken
+            .to_string()
+            .contains("the API token is invalid"));
+
+        let backend = AuthError::Backend {
+            source: keyring::Error::NoEntry,
+        };
+        let s = backend.to_string();
+        assert!(s.contains("keyring backend failed"), "{s}");
+        assert!(s.contains("No matching credential found"), "{s}");
+
+        let path = "/home/fake/.config/todoist-tui/token";
+        let io_err = AuthError::Io {
+            path: PathBuf::from(path),
+            source: ioe(),
+        };
+        let s = io_err.to_string();
+        assert!(s.contains("token file I/O failed"), "{s}");
+        assert!(s.contains(path), "path missing: {s}");
+        assert!(s.contains("denied"), "source message missing: {s}");
+
+        assert!(AuthError::EmptyToken
+            .to_string()
+            .contains("the API token must not be empty"));
+    }
+
+    #[test]
+    fn auth_error_io_renders_spaced_and_unicode_paths() {
+        // Same path-visibility contract as ConfigError::Io (T-003): the
+        // offending file is named verbatim, even with spaces/unicode.
+        let p = "/tmp/fäke dir/töken.toml";
+        let s = AuthError::Io {
+            path: PathBuf::from(p),
+            source: ioe(),
+        }
+        .to_string();
+        assert!(s.contains(p), "{s}");
+    }
+
+    #[test]
+    fn auth_error_source_chain_backend_and_io_only() {
+        // `#[source]`-annotated variants expose their cause; the unit
+        // variants have none (mirrors the ConfigError contract).
+        use std::error::Error as _;
+
+        assert!(AuthError::NotAuthenticated.source().is_none());
+        assert!(AuthError::InvalidToken.source().is_none());
+        assert!(AuthError::EmptyToken.source().is_none());
+
+        let backend = AuthError::Backend {
+            source: keyring::Error::NoEntry,
+        };
+        let src = backend.source().expect("Backend must expose source");
+        assert_eq!(src.to_string(), "No matching credential found");
+
+        let io_err = AuthError::Io {
+            path: PathBuf::from("/tmp/fake/token"),
+            source: io::Error::new(io::ErrorKind::NotFound, "no such file"),
+        };
+        let src = io_err.source().expect("Io must expose source");
+        assert_eq!(src.to_string(), "no such file");
+    }
+
+    #[test]
+    fn app_error_wraps_every_auth_variant_with_auth_prefix() {
+        for v in auth_variants() {
+            let expected = format!("auth: {v}");
+            let wrapped = AppError::from(v);
+            assert!(matches!(wrapped, AppError::Auth(_)));
+            assert_eq!(wrapped.to_string(), expected);
+            assert!(wrapped.to_string().starts_with("auth: "), "{wrapped}");
+            assert!(format!("{wrapped:?}").contains("Auth"));
+        }
+    }
+
+    #[test]
+    fn auth_error_propagates_via_question_mark_into_app_error() {
+        fn inner() -> std::result::Result<(), AuthError> {
+            Err(AuthError::EmptyToken)
+        }
+        fn outer() -> Result<()> {
+            inner()?;
+            Ok(())
+        }
+        let e = outer().unwrap_err();
+        assert!(matches!(e, AppError::Auth(AuthError::EmptyToken)));
+        assert_eq!(e.to_string(), "auth: the API token must not be empty");
+    }
+
+    #[test]
+    fn auth_error_is_error_send_sync_static() {
+        fn assert_traits<T: std::error::Error + Send + Sync + 'static>() {}
+        assert_traits::<AuthError>();
+    }
+
+    #[test]
+    fn auth_error_variants_never_leak_realistic_secret_shapes() {
+        // Goes beyond the single fixture above: several realistic
+        // secret-shaped strings (hex digest, PAT shape, bearer header,
+        // base64 blob, marker-colliding, unicode) must never appear in any
+        // variant's Display or Debug, bare or wrapped in `AppError::Auth`.
+        // All fixture values are fakes.
+        const FAKE_SECRETS: [&str; 7] = [
+            "tok_fake_abc123",
+            "deadbeefcafebabe1234567890abcdef",
+            "ghp_fake16C7e42F292c6912E7710c838347Ae17",
+            "Bearer fake 9f8e7d6c5b4a3928",
+            "c2VjcmV0LWZha2UtdG9rZW4=",
+            "tok***fake",
+            "токе́н_fäke",
+        ];
+        for v in &auth_variants() {
+            let disp = v.to_string();
+            let dbg = format!("{v:?}");
+            for s in FAKE_SECRETS {
+                assert!(!disp.contains(s), "Display leaked {s:?} via {dbg:?}");
+                assert!(!dbg.contains(s), "Debug leaked {s:?} via {dbg:?}");
+            }
+        }
+        for w in auth_variants().into_iter().map(AppError::from) {
+            let disp = w.to_string();
+            let dbg = format!("{w:?}");
+            for s in FAKE_SECRETS {
+                assert!(
+                    !disp.contains(s),
+                    "AppError::Auth Display leaked {s:?} via {disp:?}"
+                );
+                assert!(
+                    !dbg.contains(s),
+                    "AppError::Auth Debug leaked {s:?} via {dbg:?}"
+                );
+            }
+        }
     }
 }
