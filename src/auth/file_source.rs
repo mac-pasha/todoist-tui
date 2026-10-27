@@ -21,9 +21,12 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use crate::auth::Token;
 use crate::error::{AuthError, Result};
@@ -31,6 +34,12 @@ use crate::error::{AuthError, Result};
 /// Permission bits applied to the token file: owner read/write only.
 #[cfg(unix)]
 const OWNER_READ_WRITE: u32 = 0o600;
+
+/// Per-process counter used to make concurrent temp-file names for the
+/// same target path unique (pid alone is not enough if a process calls
+/// [`FileTokenSource::store`] more than once, e.g. in tests).
+#[cfg(unix)]
+static TMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// File-backed [`TokenSource`] fallback, storing the token at a fixed path.
 #[derive(Debug, Clone)]
@@ -44,7 +53,7 @@ impl FileTokenSource {
     /// Does not touch the filesystem; the file is created lazily on the
     /// first [`FileTokenSource::store`] call.
     #[must_use]
-    pub fn new(path: PathBuf) -> Self {
+    pub fn at(path: PathBuf) -> Self {
         Self { path }
     }
 
@@ -56,7 +65,7 @@ impl FileTokenSource {
     /// Returns an error when the config directory's location cannot be
     /// determined (see [`crate::config::paths::token_file`]).
     pub fn default_location() -> Result<Self> {
-        Ok(Self::new(crate::config::paths::token_file()?))
+        Ok(Self::at(crate::config::paths::token_file()?))
     }
 
     /// Path of the backing token file.
@@ -71,30 +80,112 @@ impl FileTokenSource {
             source,
         }
     }
+
+    /// Atomic, mode-at-creation store for Unix: write the token to a
+    /// sibling temp file created with `0600` permissions from the first
+    /// `open(2)` call (never a separate `chmod` after the fact), then
+    /// [`fs::rename`] it over the target. Rename within one directory is
+    /// atomic on every Unix filesystem that matters here, so readers never
+    /// observe a partially written file, and the temp file is never
+    /// reachable at a permissive mode.
+    #[cfg(unix)]
+    fn store_atomic_unix(&self, token: &Token) -> Result<()> {
+        let tmp_path = self.tmp_path();
+
+        let write_result = (|| -> io::Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(OWNER_READ_WRITE)
+                .open(&tmp_path)?;
+            file.write_all(token.expose().as_bytes())?;
+            file.sync_all()?;
+            Ok(())
+        })();
+
+        if let Err(err) = write_result {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(self.io_err(err).into());
+        }
+
+        if let Err(err) = fs::rename(&tmp_path, &self.path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(self.io_err(err).into());
+        }
+
+        Ok(())
+    }
+
+    /// Builds a unique temp-file path alongside the target, named so it
+    /// sorts invisibly next to the real file (`.`-prefixed) and never
+    /// collides across processes or repeated calls within one process.
+    #[cfg(unix)]
+    fn tmp_path(&self) -> PathBuf {
+        let file_name = self
+            .path
+            .file_name()
+            .map_or_else(|| "token".into(), std::ffi::OsStr::to_os_string);
+        let tmp_name = format!(
+            ".{}.tmp-{}-{}",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        );
+        match self.path.parent() {
+            Some(parent) => parent.join(tmp_name),
+            None => PathBuf::from(tmp_name),
+        }
+    }
 }
 
 impl super::source::TokenSource for FileTokenSource {
+    /// Reads the token file and trims trailing newline/whitespace before
+    /// constructing the [`Token`] (editors and `echo >file` always leave a
+    /// trailing `\n`; the raw byte would otherwise become part of the
+    /// token and silently break every API call). `trim_end` is used
+    /// rather than a full `trim` so leading whitespace a caller
+    /// deliberately stored — unlikely, but not this layer's business to
+    /// second-guess — is preserved; an empty-or-whitespace-only result
+    /// still surfaces as [`AuthError::EmptyToken`] via [`Token::new`].
+    ///
+    /// Invalid UTF-8 is intentionally surfaced as [`AuthError::Io`] (via
+    /// `fs::read_to_string`'s own error) rather than a dedicated variant:
+    /// a non-UTF-8 token file is corruption indistinguishable in practice
+    /// from any other unreadable file, and callers already handle `Io`.
     fn load(&self) -> Result<Option<Token>> {
         match fs::read_to_string(&self.path) {
-            Ok(raw) => Ok(Some(Token::new(raw)?)),
+            Ok(raw) => Ok(Some(Token::new(raw.trim_end().to_string())?)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(self.io_err(err).into()),
         }
     }
 
+    /// Writes `token` to the backing file atomically and with owner-only
+    /// (`0600`) permissions applied *at creation time* on Unix, so there is
+    /// never a window where the file exists on disk with a more permissive
+    /// mode.
+    ///
+    /// Implementation: the token is written to a fresh temp file created
+    /// in the same directory as the target (so the final rename stays on
+    /// one filesystem and is atomic), flushed and closed, then moved into
+    /// place with [`fs::rename`]. A failure after the temp file is created
+    /// triggers a best-effort cleanup of that temp file; cleanup errors are
+    /// ignored so the original error is always what callers see.
     fn store(&self, token: &Token) -> Result<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| self.io_err(source))?;
         }
-        fs::write(&self.path, token.expose()).map_err(|source| self.io_err(source))?;
 
         #[cfg(unix)]
         {
-            let permissions = fs::Permissions::from_mode(OWNER_READ_WRITE);
-            fs::set_permissions(&self.path, permissions).map_err(|source| self.io_err(source))?;
+            self.store_atomic_unix(token)
         }
 
-        Ok(())
+        #[cfg(not(unix))]
+        {
+            fs::write(&self.path, token.expose()).map_err(|source| self.io_err(source))
+        }
     }
 
     fn clear(&self) -> Result<()> {
@@ -136,7 +227,7 @@ mod tests {
     #[test]
     fn store_then_load_round_trips_an_equal_token() {
         let path = temp_token_path();
-        let source = FileTokenSource::new(path.clone());
+        let source = FileTokenSource::at(path.clone());
         let token = Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty token");
         source.store(&token).expect("store ok");
         let loaded = source.load().expect("load ok").expect("token present");
@@ -147,14 +238,14 @@ mod tests {
     #[test]
     fn load_on_missing_file_returns_none() {
         let path = temp_token_path();
-        let source = FileTokenSource::new(path);
+        let source = FileTokenSource::at(path);
         assert!(source.load().expect("load ok").is_none());
     }
 
     #[test]
     fn clear_removes_the_file_and_is_idempotent_when_missing() {
         let path = temp_token_path();
-        let source = FileTokenSource::new(path.clone());
+        let source = FileTokenSource::at(path.clone());
         let token = Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty token");
         source.store(&token).expect("store ok");
         assert!(path.exists());
@@ -165,7 +256,7 @@ mod tests {
 
     #[test]
     fn describe_names_the_backend() {
-        let source = FileTokenSource::new(temp_token_path());
+        let source = FileTokenSource::at(temp_token_path());
         assert_eq!(source.describe(), "token file");
     }
 
@@ -173,7 +264,7 @@ mod tests {
     #[test]
     fn store_sets_owner_only_permissions() {
         let path = temp_token_path();
-        let source = FileTokenSource::new(path.clone());
+        let source = FileTokenSource::at(path.clone());
         let token = Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty token");
         source.store(&token).expect("store ok");
 
@@ -183,9 +274,28 @@ mod tests {
     }
 
     #[test]
+    fn store_leaves_no_stray_temp_file_behind() {
+        // The atomic write path creates a sibling `.{name}.tmp-*` file and
+        // renames it over the target; after a successful store only the
+        // final file may exist in the directory.
+        let root = temp_token_path().join("dir");
+        let path = root.join("token");
+        let source = FileTokenSource::at(path.clone());
+        let token = Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty token");
+        source.store(&token).expect("store ok");
+
+        let entries: Vec<_> = fs::read_dir(&root)
+            .expect("dir readable")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("token")]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn store_creates_parent_directories() {
         let path = temp_token_path().join("nested").join("token");
-        let source = FileTokenSource::new(path.clone());
+        let source = FileTokenSource::at(path.clone());
         let token = Token::new(FIXTURE_TOKEN.to_string()).expect("non-empty token");
         source.store(&token).expect("store ok");
         assert!(path.exists());
@@ -273,7 +383,7 @@ mod unit_tests {
     fn second_store_wins_and_the_file_holds_only_the_latest_token() {
         let root = temp_root("overwrite");
         let path = root.join("token");
-        let source = FileTokenSource::new(path.clone());
+        let source = FileTokenSource::at(path.clone());
         source.store(&token(FAKE_A)).expect("store A");
         source.store(&token(FAKE_B)).expect("store B");
         assert_eq!(
@@ -289,7 +399,7 @@ mod unit_tests {
     #[test]
     fn store_clear_store_cycles_keep_the_source_usable() {
         let root = temp_root("cycles");
-        let source = FileTokenSource::new(root.join("token"));
+        let source = FileTokenSource::at(root.join("token"));
         for (i, v) in [FAKE_A, FAKE_B, FAKE_A].iter().enumerate() {
             source.store(&token(v)).expect("store ok");
             assert_eq!(
@@ -307,7 +417,7 @@ mod unit_tests {
     fn load_is_repeatable_and_leaves_the_file_untouched() {
         let root = temp_root("repeat");
         let path = root.join("token");
-        let source = FileTokenSource::new(path.clone());
+        let source = FileTokenSource::at(path.clone());
         source.store(&token(FAKE_A)).expect("store ok");
         for _ in 0..3 {
             assert_eq!(
@@ -322,23 +432,18 @@ mod unit_tests {
     #[test]
     fn on_disk_bytes_are_exactly_the_exposed_token() {
         // The file layer must persist exactly what `Token::expose` hands
-        // it — no trimming, escaping, newline appending or reformatting —
-        // for adversarial shapes (whitespace padding, marker-bearing,
-        // newline-bearing, unicode, 1 KiB).
+        // it — no escaping or reformatting — for adversarial shapes
+        // (marker-bearing, *interior* whitespace/newlines, unicode, 1 KiB).
+        // Leading/trailing whitespace is deliberately excluded here: `load`
+        // trims trailing whitespace (see `trailing_newline_is_stripped_on_load`
+        // below), so it is not part of the byte-exact round-trip contract.
         let root = temp_root("bytes");
         let path = root.join("token");
-        let source = FileTokenSource::new(path.clone());
-        let mut values: Vec<String> = [
-            "x",
-            "***",
-            "tok***fake",
-            "  tok_fake_pad_51  ",
-            "a\nb\tc",
-            "токе́н_fäke",
-        ]
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+        let source = FileTokenSource::at(path.clone());
+        let mut values: Vec<String> = ["x", "***", "tok***fake", "a\nb\tc", "токе́н_fäke"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         values.push(format!("tok_fake_{}", "z".repeat(1024)));
         for v in &values {
             source.store(&token(v)).expect("store ok");
@@ -353,20 +458,37 @@ mod unit_tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[test]
+    fn trailing_newline_is_stripped_on_load() {
+        // Any editor or `echo tok > file` leaves a trailing `\n`; `load`
+        // must strip it rather than fold it into the token value.
+        let root = temp_root("trailing-newline");
+        let path = root.join("token");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&path, format!("{FAKE_A}\n")).unwrap();
+        let loaded = FileTokenSource::at(path)
+            .load()
+            .expect("load ok")
+            .expect("present");
+        assert_eq!(loaded.expose(), FAKE_A);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     // ---- Unix permission contract (acceptance) ----
 
     #[cfg(unix)]
     #[test]
     fn store_re_tightens_a_pre_existing_world_readable_file_to_0600() {
-        // `fs::write` keeps an existing file's mode, so the explicit
-        // set_permissions call is the only thing enforcing 0600 on the
-        // overwrite path: a pre-planted 0666 file must end owner-only.
+        // `store` never writes to an existing file in place: it always
+        // creates a fresh 0600 temp file and renames it over the target,
+        // so a pre-planted 0666 file must end up owner-only afterwards
+        // regardless of its prior mode.
         let root = temp_root("retighten");
         fs::create_dir_all(&root).unwrap();
         let path = root.join("token");
         fs::write(&path, b"stale").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
-        let source = FileTokenSource::new(path.clone());
+        let source = FileTokenSource::at(path.clone());
         source.store(&token(FAKE_A)).expect("store over 0666 file");
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "mode was {mode:o}");
@@ -386,7 +508,7 @@ mod unit_tests {
         fs::create_dir_all(&root).unwrap();
         for body in ["", "   \n\t"] {
             fs::write(&path, body).unwrap();
-            match FileTokenSource::new(path.clone()).load() {
+            match FileTokenSource::at(path.clone()).load() {
                 // OBSERVED CONTRACT (documented, asserted): a present but
                 // empty/whitespace-only file is corruption, not "no
                 // token" — load surfaces AuthError::EmptyToken rather
@@ -404,7 +526,7 @@ mod unit_tests {
         let path = root.join("token");
         fs::create_dir_all(&root).unwrap();
         fs::write(&path, [0xff, 0xfe, 0x00, 0x10]).unwrap();
-        match FileTokenSource::new(path).load() {
+        match FileTokenSource::at(path).load() {
             Err(AppError::Auth(AuthError::Io { .. })) => {}
             other => panic!("expected AuthError::Io, got {other:?}"),
         }
@@ -416,7 +538,7 @@ mod unit_tests {
         let root = temp_root("isdir");
         let path = root.join("token");
         fs::create_dir_all(&path).unwrap(); // the path itself is a directory
-        let source = FileTokenSource::new(path);
+        let source = FileTokenSource::at(path);
         match source.load() {
             Err(AppError::Auth(AuthError::Io { .. })) => {}
             other => panic!("load: expected AuthError::Io, got {other:?}"),
@@ -435,7 +557,7 @@ mod unit_tests {
         let blocker = root.join("blocker");
         fs::write(&blocker, b"x").unwrap();
         let expected = blocker.join("nested").join("token");
-        let source = FileTokenSource::new(expected.clone());
+        let source = FileTokenSource::at(expected.clone());
         match source.store(&token(FAKE_A)) {
             Err(AppError::Auth(AuthError::Io { path, .. })) => {
                 assert_eq!(path, expected, "error must name the token file");
@@ -450,7 +572,7 @@ mod unit_tests {
         // NotADirectory/NotFound on every access: missing parents are the
         // same "nothing stored yet" state as a missing file.
         let root = temp_root("ghost"); // deliberately never created
-        let source = FileTokenSource::new(root.join("no").join("such").join("token"));
+        let source = FileTokenSource::at(root.join("no").join("such").join("token"));
         assert!(source.load().expect("load on missing parent").is_none());
         source.clear().expect("clear on missing parent is Ok(())");
         source.clear().expect("clear twice is still Ok(())");
@@ -465,7 +587,7 @@ mod unit_tests {
         fs::create_dir_all(&root).unwrap();
         let blocker = root.join("blocker");
         fs::write(&blocker, b"x").unwrap();
-        let source = FileTokenSource::new(blocker.join("nested").join("token"));
+        let source = FileTokenSource::at(blocker.join("nested").join("token"));
         // Debug holds a path only — before and after a token ever flows
         // through the source.
         let dbg_before = format!("{source:?}");
@@ -515,7 +637,7 @@ mod unit_tests {
     #[test]
     fn path_accessor_returns_exactly_the_configured_path() {
         let p = PathBuf::from("/definitely/not/created/token-t104");
-        let source = FileTokenSource::new(p.clone());
+        let source = FileTokenSource::at(p.clone());
         assert_eq!(source.path(), p.as_path());
         assert!(!source.path().exists());
     }
@@ -525,7 +647,7 @@ mod unit_tests {
     #[test]
     fn works_behind_box_dyn_and_in_a_memory_then_file_fallback_chain() {
         let root = temp_root("chain");
-        let file: Box<dyn TokenSource> = Box::new(FileTokenSource::new(root.join("token")));
+        let file: Box<dyn TokenSource> = Box::new(FileTokenSource::at(root.join("token")));
         assert!(file.load().expect("load").is_none());
         file.store(&token(FAKE_A)).expect("store via Box");
         assert_eq!(
@@ -564,7 +686,7 @@ mod unit_tests {
         // app state will need once auth crosses await points.
         fn assert_send_sync<T: Send + Sync + 'static>() {}
         assert_send_sync::<FileTokenSource>();
-        let boxed: Box<dyn TokenSource + Send + Sync> = Box::new(FileTokenSource::new(
+        let boxed: Box<dyn TokenSource + Send + Sync> = Box::new(FileTokenSource::at(
             PathBuf::from("/nonexistent/token-t104"),
         ));
         assert!(boxed.load().expect("load").is_none());
