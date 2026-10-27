@@ -172,7 +172,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "clap derive. Keep stubs free of any network/DB/UI code - EPIC-02/03/06/11 fill them in. Verify the clap command tree with `Command::debug_assert()` in a unit test. The `add` positional exists only so EPIC-11 can attach behaviour without changing the CLI surface.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-008",
