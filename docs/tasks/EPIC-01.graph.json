@@ -214,7 +214,7 @@
         "Only the Project section between the PROJECT SECTION markers is modified; the Agentic SDLC section is byte-identical (`git diff` shows changes only within those markers)"
       ],
       "context": "Hard rule 10 allows editing CLAUDE.md only because this epic explicitly asks for it - restrict the diff to the marked Project section. Commands must match T-008's workflow exactly so contributors and CI agree.",
-      "status": "todo"
+      "status": "review"
     }
   ]
 }
