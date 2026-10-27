@@ -120,7 +120,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Depends on T-004 for `paths::config_file()`. Use the `toml` crate; map `toml::de::Error::span()`/line info into `ConfigError::Parse`. Keymap is a free-form string map here - EPIC-07 interprets it; do not validate key names yet.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-006",
