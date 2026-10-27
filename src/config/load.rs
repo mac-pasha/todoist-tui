@@ -113,19 +113,25 @@ fn line_col(source: &str, offset: usize) -> (usize, usize) {
 }
 
 /// Unit tests (T-005). `XDG_CONFIG_HOME` is process-global, so env-touching
-/// tests take `ENV_LOCK` via `EnvGuard`, which restores the variable on drop.
+/// tests take the shared `crate::config::test_support::ENV_LOCK` via
+/// `EnvGuard`, which restores the variable on drop. That lock is shared with
+/// `config::paths`'s tests (T-104 follow-up): both modules' `#[cfg(test)]`
+/// code runs in the same test binary (not separate processes), so a
+/// per-module `static ENV_LOCK` gave no real mutual exclusion between the
+/// two sets of tests — a test here could still race a `paths` test mutating
+/// the same variable.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::model::DefaultView;
+    use crate::config::test_support::ENV_LOCK;
     use std::env;
     use std::ffi::OsString;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
     use std::time::Duration;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     struct EnvGuard {
@@ -164,11 +170,13 @@ mod tests {
         d
     }
 
-    /// `paths::tests` guards `XDG_CONFIG_HOME` with its own private mutex that
-    /// this module cannot take, so another thread may rewrite the variable
-    /// between our `set_var` and `Config::load()`. Re-assert the variable and
-    /// retry (bounded) when interference is detected; a real loader bug still
-    /// fails because the retry only covers "env changed under us".
+    /// `EnvGuard` now shares `ENV_LOCK` with `paths::tests` (T-104 follow-up),
+    /// so a `paths` test cannot run concurrently with this one; the retry
+    /// below is kept anyway as a defence against any future test that reads
+    /// `XDG_CONFIG_HOME` without holding the shared lock — re-assert the
+    /// variable and retry (bounded) when interference is detected. A real
+    /// loader bug still fails because the retry only covers "env changed
+    /// under us".
     fn load_with_xdg(tmp: &PathBuf) -> Config {
         for _ in 0..200 {
             env::set_var("XDG_CONFIG_HOME", tmp);
@@ -394,5 +402,22 @@ mod tests {
         for bad in ["token", "secret", "password", "api_key"] {
             assert!(!d.contains(bad), "{d}");
         }
+    }
+
+    #[test]
+    fn env_guard_shares_one_lock_with_paths_tests() {
+        // T-104 fix: this module and `paths::tests` must bind the single
+        // shared lock in `config::test_support`, not private per-module
+        // statics (two independent mutexes gave no cross-module mutual
+        // exclusion and raced on XDG_CONFIG_HOME). Identity of the bound
+        // static is what the fix hinges on, so assert it: re-introducing a
+        // local `static ENV_LOCK` here makes this fail deterministically
+        // instead of the old intermittent env-leak flake.
+        let local: &std::sync::Mutex<()> = &ENV_LOCK;
+        let shared: &std::sync::Mutex<()> = &crate::config::test_support::ENV_LOCK;
+        assert!(
+            std::ptr::eq(local, shared),
+            "load tests must share one ENV_LOCK with paths tests"
+        );
     }
 }
