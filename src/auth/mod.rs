@@ -1,10 +1,10 @@
-//! Authentication / API token handling (T-101, T-102, EPIC-02).
+//! Authentication / API token handling (T-101, T-102, T-103, EPIC-02).
 //!
 //! [`token`] defines the [`Token`] newtype that keeps the Todoist API token
 //! redacted everywhere except the single, greppable [`Token::expose`] read
-//! path. [`source`] defines the [`TokenSource`] storage seam (in-memory
-//! test backend only for now); concrete OS backends (keyring, file) land in
-//! T-103/T-104, and HTTP client wiring lands in later EPIC-02 tasks.
+//! path. [`source`] defines the [`TokenSource`] storage seam; [`keyring_source`]
+//! is the OS keyring-backed implementation, T-104 lands a file-backed
+//! fallback, and HTTP client wiring lands in later EPIC-02 tasks.
 
 // Consumers land in later EPIC-02 tasks (keyring storage, HTTP client
 // wiring); `pub` alone does not silence `dead_code` in a binary crate, so
@@ -12,8 +12,10 @@
 // `config/paths.rs` (T-004).
 #![allow(dead_code, unused_imports)]
 
+pub mod keyring_source;
 pub mod source;
 pub mod token;
 
+pub use keyring_source::KeyringTokenSource;
 pub use source::{MemoryTokenSource, TokenSource};
 pub use token::Token;
