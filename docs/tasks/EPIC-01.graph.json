@@ -24,7 +24,7 @@
         "`.gitignore` ignores `/target`, and local artefacts; it does not ignore `Cargo.lock`"
       ],
       "context": "Greenfield repo: this is the first Rust file in the tree. Binary crate (not workspace). Keep module files out of this PR - later tasks add them. Requirement REQ-001 mandates HTTPS via rustls only. keyring pulls dbus/secret-service on Linux: confirm `cargo build` works and note any system packages needed in the PR description (CI job in T-008 verifies on a clean container).",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-002",
