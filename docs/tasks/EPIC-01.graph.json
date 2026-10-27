@@ -94,7 +94,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Use the `directories`/`dirs` crate pinned in T-001 for non-XDG platforms, but honour XDG env vars first on all platforms so tests can redirect them. Env-var mutation in tests is process-global: serialise those tests (e.g. a mutex or `serial_test`-style guard) and document the choice. Windows fallbacks are best-effort per NFR.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-005",
