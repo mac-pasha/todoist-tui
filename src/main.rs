@@ -3,6 +3,9 @@
 //! Bootstrap task T-001: sets up the crate and the pinned dependency stack
 //! only. UI, sync, storage and config modules arrive in later tasks.
 
+/// Typed error hierarchy and crate-wide `Result` alias (T-003).
+mod error;
+
 fn main() {
     println!("todoist-tui bootstrap placeholder (T-001)");
 }
@@ -112,8 +115,8 @@ mod bootstrap_tests {
             ("directories", &[]),
         ];
         for (name, needed_features) in required {
-            let name: &str = *name;
-            let needed_features: &[&str] = *needed_features;
+            let name: &str = name;
+            let needed_features: &[&str] = needed_features;
             let _ = dep_version(&spec, name); // panics if missing
             let feats = dep_features(&spec, name);
             for f in needed_features {
@@ -233,8 +236,14 @@ mod bootstrap_tests {
             .cloned()
             .expect("toolchain.components must be an array");
         let comps: Vec<&str> = components.iter().filter_map(|v| v.as_str()).collect();
-        assert!(comps.iter().any(|c| *c == "rustfmt"), "missing rustfmt component: {comps:?}");
-        assert!(comps.iter().any(|c| *c == "clippy"), "missing clippy component: {comps:?}");
+        assert!(
+            comps.contains(&"rustfmt"),
+            "missing rustfmt component: {comps:?}"
+        );
+        assert!(
+            comps.contains(&"clippy"),
+            "missing clippy component: {comps:?}"
+        );
     }
 
     // ---- Acceptance item 4: placeholder entrypoint, no modules ----
