@@ -1,0 +1,25 @@
+# clippy.toml — project-wide clippy thresholds & allowances (T-002, EPIC-01).
+#
+# Consumed by the lints declared in Cargo.toml [lints.clippy]:
+#   - `clippy::pedantic` (warn) enables `too_many_lines` and
+#     `cognitive_complexity`; the thresholds below bound them.
+#   - `clippy::unwrap_used` / `clippy::expect_used` are deny in production
+#     code; the two `allow-*-in-tests` switches scope that denial to
+#     non-test code only (equivalent to a crate-level
+#     `#![cfg_attr(test, allow(...))]`, kept here so src/main.rs needs no
+#     edits). Test code may unwrap/expect freely.
+
+# Lint thresholds ----------------------------------------------------------
+
+# `clippy::too_many_lines` (pedantic): warn on functions longer than 80 lines.
+too-many-lines-threshold = 80
+
+# `clippy::cognitive_complexity` (pedantic): warn above 25 branch points
+# (default). TUI event loops and render functions will need `#[allow]` with a
+# reason once they exceed this; prefer extraction over allows.
+cognitive-complexity-threshold = 25
+
+# Allowances scoped to `#[cfg(test)]` code (see header). Production code
+# remains deny (set in Cargo.toml [lints.clippy]).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

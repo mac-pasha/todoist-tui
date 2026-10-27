@@ -46,7 +46,7 @@
         "`cargo clippy --all-targets -- -D warnings` exits 0 on the current tree"
       ],
       "context": "Touches Cargo.toml again after T-001 - rebase on it, do not re-pin dependencies here. Lint strictness must still allow later epics to compile; prefer warn for pedantic, deny for the unwrap/expect pair.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-003",

@@ -30,7 +30,11 @@ mod bootstrap_tests {
     /// with numeric components — no caret/`*`/`>=` prefix, no patch.
     fn is_major_minor(spec: &str) -> bool {
         let s = spec.trim();
-        if s.starts_with(['^', '>', '<', '=']) || s.contains('*') || s.contains('-') || s.contains('+') {
+        if s.starts_with(['^', '>', '<', '='])
+            || s.contains('*')
+            || s.contains('-')
+            || s.contains('+')
+        {
             return false;
         }
         let parts: Vec<&str> = s.split('.').filter(|p| !p.is_empty()).collect();
@@ -83,7 +87,12 @@ mod bootstrap_tests {
             .as_array()
             .cloned()
             .expect("[[bin]] must be an array");
-        assert_eq!(bins.len(), 1, "expected exactly one [[bin]] target, found {}", bins.len());
+        assert_eq!(
+            bins.len(),
+            1,
+            "expected exactly one [[bin]] target, found {}",
+            bins.len()
+        );
         assert_eq!(bins[0]["name"].as_str(), Some("todoist-tui"));
         assert_eq!(bins[0]["path"].as_str(), Some("src/main.rs"));
     }
@@ -112,8 +121,8 @@ mod bootstrap_tests {
             ("directories", &[]),
         ];
         for (name, needed_features) in required {
-            let name: &str = *name;
-            let needed_features: &[&str] = *needed_features;
+            let name: &str = name;
+            let needed_features: &[&str] = needed_features;
             let _ = dep_version(&spec, name); // panics if missing
             let feats = dep_features(&spec, name);
             for f in needed_features {
@@ -129,9 +138,18 @@ mod bootstrap_tests {
     fn called_out_crates_are_major_minor_pinned() {
         let spec = manifest();
         let pinned: &[&str] = &[
-            "ratatui", "crossterm", "tokio", "reqwest", "rusqlite",
-            "keyring", "uuid", "thiserror", "clap", "toml",
-            "directories", "serde_json",
+            "ratatui",
+            "crossterm",
+            "tokio",
+            "reqwest",
+            "rusqlite",
+            "keyring",
+            "uuid",
+            "thiserror",
+            "clap",
+            "toml",
+            "directories",
+            "serde_json",
         ];
         for name in pinned {
             let v = dep_version(&spec, name);
@@ -184,8 +202,14 @@ mod bootstrap_tests {
             other => panic!("reqwest default-features must be false, got {other:?}"),
         }
         let feats = dep_features(&spec, "reqwest");
-        assert!(feats.iter().any(|x| x == "json"), "reqwest missing feature json: {feats:?}");
-        assert!(feats.iter().any(|x| x == "rustls-tls"), "reqwest missing feature rustls-tls: {feats:?}");
+        assert!(
+            feats.iter().any(|x| x == "json"),
+            "reqwest missing feature json: {feats:?}"
+        );
+        assert!(
+            feats.iter().any(|x| x == "rustls-tls"),
+            "reqwest missing feature rustls-tls: {feats:?}"
+        );
     }
 
     #[test]
@@ -194,7 +218,10 @@ mod bootstrap_tests {
         // is run separately as PR evidence; the manifest feature set is the
         // source of truth for which TLS backend gets pulled in).
         let spec = manifest();
-        for (name, tbl) in spec["dependencies"].as_table().expect("[dependencies] missing") {
+        for (name, tbl) in spec["dependencies"]
+            .as_table()
+            .expect("[dependencies] missing")
+        {
             assert!(
                 !name.starts_with("openssl"),
                 "openssl-family dependency declared: {name}"
@@ -233,8 +260,14 @@ mod bootstrap_tests {
             .cloned()
             .expect("toolchain.components must be an array");
         let comps: Vec<&str> = components.iter().filter_map(|v| v.as_str()).collect();
-        assert!(comps.iter().any(|c| *c == "rustfmt"), "missing rustfmt component: {comps:?}");
-        assert!(comps.iter().any(|c| *c == "clippy"), "missing clippy component: {comps:?}");
+        assert!(
+            comps.contains(&"rustfmt"),
+            "missing rustfmt component: {comps:?}"
+        );
+        assert!(
+            comps.contains(&"clippy"),
+            "missing clippy component: {comps:?}"
+        );
     }
 
     // ---- Acceptance item 4: placeholder entrypoint, no modules ----
@@ -255,7 +288,10 @@ mod bootstrap_tests {
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
             .map(str::to_string)
             .collect();
-        assert!(offenders.is_empty(), "unexpected module declarations: {offenders:?}");
+        assert!(
+            offenders.is_empty(),
+            "unexpected module declarations: {offenders:?}"
+        );
     }
 
     // ---- Acceptance item 6: .gitignore ----
@@ -268,15 +304,18 @@ mod bootstrap_tests {
             .map(str::trim)
             .filter(|l| !l.is_empty() && !l.starts_with('#'))
             .collect();
-        let ignores_target = lines.iter().any(|l| {
-            l.trim_start_matches('-').trim_start_matches('!') == "/target"
-        });
+        let ignores_target = lines
+            .iter()
+            .any(|l| l.trim_start_matches('-').trim_start_matches('!') == "/target");
         assert!(ignores_target, ".gitignore must ignore /target: {lines:?}");
         let ignores_lock = lines.iter().any(|l| {
             let pat = l.trim_start_matches('-').trim_start_matches('!');
             pat == "Cargo.lock" || pat == "/Cargo.lock" || pat == "**/Cargo.lock"
         });
-        assert!(!ignores_lock, ".gitignore must NOT ignore Cargo.lock: {lines:?}");
+        assert!(
+            !ignores_lock,
+            ".gitignore must NOT ignore Cargo.lock: {lines:?}"
+        );
     }
 
     // ---- Acceptance item 5: Cargo.lock committed (git-level, checked here) ----

@@ -1,0 +1,9 @@
+# rustfmt.toml — project formatting config (T-002, EPIC-01).
+#
+# Deliberately minimal: defaults everywhere except an explicit edition
+# (rustfmt must not guess from ambient Cargo.toml state) and the canonical
+# 100-column width. `cargo fmt --all -- --check` must pass on every task
+# branch; keep code formatted as you go.
+
+edition = "2021"
+max_width = 100
