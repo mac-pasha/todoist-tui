@@ -146,7 +146,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Deliberately minimal and self-contained: EPIC-03 owns the real typed Sync API client with retries/backoff, so do NOT build retry, rate-limit or domain-model code here - a doc comment must say EPIC-03 supersedes this and that this module exists only to validate a token at `auth` time. `base_url` is a parameter (default const `https://api.todoist.com`) purely so wiremock can point it at `127.0.0.1`. The only Cargo.toml change allowed is adding `wiremock` under `[dev-dependencies]`; do not touch the existing dependency pins or lint sections.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-107",
