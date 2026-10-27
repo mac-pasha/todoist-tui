@@ -1,19 +1,63 @@
-//! Placeholder entrypoint for `todoist-tui`.
+//! Entrypoint for `todoist-tui`.
 //!
-//! Bootstrap task T-001: sets up the crate and the pinned dependency stack
-//! only. UI, sync, storage and config modules arrive in later tasks.
+//! T-007 wires the CLI skeleton end to end: load config, initialise logging,
+//! parse arguments, dispatch to a subcommand stub (or the not-yet-built TUI
+//! default). UI, sync and storage still arrive in later epics.
 
 /// Typed error hierarchy and crate-wide `Result` alias (T-003).
 mod error;
 
-/// Platform config/state directory resolution (T-004).
+/// Platform config/state directory resolution (T-004); TOML config loading
+/// (T-005).
 mod config;
 
 /// Tracing to a rotating state-dir log file, with secret redaction (T-006).
 mod log;
 
-fn main() {
-    println!("todoist-tui bootstrap placeholder (T-001)");
+/// Clap CLI surface and subcommand stubs (T-007).
+mod cli;
+
+use std::process::ExitCode;
+
+use config::Config;
+use error::AppError;
+use log::LogOptions;
+
+fn main() -> ExitCode {
+    let cli = cli::parse();
+
+    // `--config` is accepted on the CLI surface in this task; T-005's loader
+    // only resolves the platform-default path today, so an explicit override
+    // falls back to `Config::load_from` instead of re-deriving `config_dir`
+    // logic here.
+    let config_result = match &cli.config {
+        Some(path) => Config::load_from(path).map_err(AppError::from),
+        None => Config::load().map_err(AppError::from),
+    };
+    let _config = match config_result {
+        Ok(config) => config,
+        Err(error) => return fail(&error),
+    };
+
+    // Hold the guard for the process lifetime: dropping it flushes buffered
+    // log records and stops the writer thread.
+    let _log_guard = match log::init(LogOptions::new()) {
+        Ok(guard) => guard,
+        Err(error) => return fail(&error),
+    };
+
+    match cli::run(&cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => fail(&error),
+    }
+}
+
+/// Prints `error` to stderr and returns exit code 1 — no panic, no
+/// backtrace, used for every failure path in `main` (config load, log init,
+/// subcommand dispatch).
+fn fail(error: &AppError) -> ExitCode {
+    eprintln!("{error}");
+    ExitCode::FAILURE
 }
 
 /// Bootstrap invariants for T-001 (EPIC-01).
@@ -296,12 +340,13 @@ mod bootstrap_tests {
             // that the placeholder crate declares no production modules.
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
             // T-003 requires `mod error;`, T-004 requires `mod config;`,
-            // T-006 requires `mod log;`. The only other permitted lines are
-            // the cfg(test) modules below.
+            // T-006 requires `mod log;`, T-007 requires `mod cli;`. The only
+            // other permitted lines are the cfg(test) modules below.
             .filter(|l| {
                 *l != "mod error;"
                     && *l != "mod config;"
                     && *l != "mod log;"
+                    && *l != "mod cli;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)
