@@ -1,0 +1,7 @@
+# agentic SDLC harness
+.claude/settings.local.json
+.sdlc/reviews/
+
+# Rust build artefacts (Cargo.lock stays tracked for reproducible binary builds)
+/target
+**/*.rs.bk

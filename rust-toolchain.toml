@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned to stable 1.99.1 (rustc 1.99.1, released 2026-10-13) — the exact
+# stable toolchain installed locally, pinned for reproducible builds/CI.
+# The dependency stack is developed and verified against this release.
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
