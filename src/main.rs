@@ -6,6 +6,9 @@
 /// Typed error hierarchy and crate-wide `Result` alias (T-003).
 mod error;
 
+/// Platform config/state directory resolution (T-004).
+mod config;
+
 fn main() {
     println!("todoist-tui bootstrap placeholder (T-001)");
 }
@@ -289,9 +292,11 @@ mod bootstrap_tests {
             // Ignore this test module's own declaration; acceptance asks
             // that the placeholder crate declares no production modules.
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
-            // T-003 acceptance item 5 requires `mod error;`. The only other
-            // permitted line is the cfg(test) `error_tests` module below.
-            .filter(|l| *l != "mod error;" && !l.starts_with("mod error_tests"))
+            // T-003 requires `mod error;`, T-004 requires `mod config;`. The
+            // only other permitted lines are the cfg(test) modules below.
+            .filter(|l| {
+                *l != "mod error;" && *l != "mod config;" && !l.starts_with("mod error_tests")
+            })
             .map(str::to_string)
             .collect();
         assert!(
