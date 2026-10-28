@@ -1,11 +1,16 @@
-//! Clap CLI skeleton (T-007, EPIC-01).
+//! Clap CLI surface (T-007, EPIC-01; `auth` implemented in T-107, `logout`
+//! in T-108; `sync`/`add`/`today` gated on authentication in T-109).
 //!
 //! Defines the `todoist-tui` command surface: a global `--config` override
-//! plus five subcommands (`auth`, `logout`, `sync`, `add`, `today`). Every
-//! subcommand is a stub in this task — [`commands::dispatch`] returns
-//! [`crate::error::AppError::NotImplemented`] for each of them, and so does
-//! [`run`] itself when no subcommand is given (the default TUI path, not
-//! built yet). `main` maps that error to a stderr message and exit code 1.
+//! plus five subcommands (`auth`, `logout`, `sync`, `add`, `today`). `auth`
+//! routes to the real implementation in [`auth`], `logout` to [`logout`];
+//! the remaining subcommands are still stubs — [`commands::dispatch`]
+//! returns [`crate::error::AppError::NotImplemented`] for them, but only
+//! after a shared guard (T-109) requires a stored token first, failing with
+//! [`crate::error::AuthError::NotAuthenticated`] otherwise; [`run`] itself
+//! returns [`crate::error::AppError::NotImplemented`] unguarded when no
+//! subcommand is given (the default TUI path, not built yet). `main` maps
+//! errors to a stderr message and exit code 1.
 //!
 //! [`build_cli`] exposes the underlying [`clap::Command`] (via
 //! [`clap::CommandFactory`]) as a plain function so CLI tests (trycmd /
@@ -13,7 +18,9 @@
 //! spawning the binary, and so [`clap::Command::debug_assert`] has a
 //! reachable call site.
 
+pub mod auth;
 pub mod commands;
+pub mod logout;
 
 use std::path::PathBuf;
 
@@ -94,16 +101,16 @@ pub fn parse() -> Cli {
     Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
 }
 
-/// Dispatches a parsed [`Cli`] to its subcommand stub.
+/// Dispatches a parsed [`Cli`] to its subcommand implementation.
 ///
 /// No subcommand selected routes to the default TUI path, which is itself
-/// not implemented yet in this task.
+/// not implemented yet.
 ///
 /// # Errors
 ///
-/// Always returns [`AppError::NotImplemented`] in this task: `"tui"` for the
-/// default path, or the subcommand's name for each stub (see
-/// [`commands::dispatch`]).
+/// Returns whatever the routed implementation returns for `auth`; otherwise
+/// [`AppError::NotImplemented`]: `"tui"` for the default path, or the
+/// subcommand's name for each remaining stub (see [`commands::dispatch`]).
 pub fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         None => Err(AppError::NotImplemented("tui")),
@@ -122,5 +129,32 @@ mod tests {
     #[test]
     fn cli_definition_is_internally_consistent() {
         build_cli().debug_assert();
+    }
+
+    /// T-107 acceptance: the token must never be accepted as a CLI argument —
+    /// it only ever comes from the interactive prompt or piped stdin.
+    #[test]
+    fn auth_takes_no_token_argument() {
+        let command = build_cli();
+        assert!(
+            command
+                .get_arguments()
+                .all(|arg| arg.get_id().as_str() != "token"),
+            "no top-level argument may be named `token`"
+        );
+        assert!(
+            command
+                .get_subcommands()
+                .all(|subcommand| subcommand.get_name() != "token"),
+            "no subcommand may be named `token`"
+        );
+        let auth = command
+            .find_subcommand("auth")
+            .expect("the `auth` subcommand exists");
+        assert_eq!(
+            auth.get_arguments().count(),
+            0,
+            "`auth` must take no arguments at all (no positional, no option)"
+        );
     }
 }

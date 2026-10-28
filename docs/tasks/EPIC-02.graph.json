@@ -69,7 +69,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "`keyring = \"4.2\"` is already in Cargo.toml (Linux: secret-service via zbus, macOS: keychain). Do not add dependencies - if the mock store needs a feature flag that is not enabled, stop and report instead of editing Cargo.toml (it is outside this task's files). Risk called out in the epic: headless Linux has no secret-service, so `is_available()` must be a real probe, not an `cfg!(target_os)` guess. Never log the token; log only `describe()` and error kinds.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-104",
@@ -95,7 +95,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Reuse `crate::config::paths` conventions (T-004): pure functions reading env at call time, `ConfigError::Io { path, source }` on failure; add the new constant next to `CONFIG_FILE_NAME`/`LOG_FILE_NAME`. REQ-001 NFR requires 0600 for the fallback token file. Tests must use a temp dir via `FileTokenSource::at`, never the real user config dir; env-mutating tests in `paths.rs` already serialize with a mutex - follow that pattern.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-105",
@@ -120,7 +120,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean and `cargo test --all` passes"
       ],
       "context": "This is the single entry point every other command uses (`sync`/`add`/`today` in T-109, `logout` in T-108). Epic risk: headless Linux without secret-service is the common case, so the fallback path must be first-class and fully unit-tested via `with_sources`. The user-visible notice text is printed by the `auth` command (T-107), not here - this task only produces the string.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-106",
@@ -146,7 +146,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Deliberately minimal and self-contained: EPIC-03 owns the real typed Sync API client with retries/backoff, so do NOT build retry, rate-limit or domain-model code here - a doc comment must say EPIC-03 supersedes this and that this module exists only to validate a token at `auth` time. `base_url` is a parameter (default const `https://api.todoist.com`) purely so wiremock can point it at `127.0.0.1`. The only Cargo.toml change allowed is adding `wiremock` under `[dev-dependencies]`; do not touch the existing dependency pins or lint sections.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-107",
@@ -173,7 +173,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Follow the dispatch pattern in `src/cli/commands.rs` (match on `Commands`, return `crate::error::Result<()>`; `main` prints the error and returns exit code 1). Use `crossterm` (already a dependency) for echo control - do not add `rpassword` or any new crate. Wrap the entered string in `Token::new` immediately so no bare `String` token lives beyond the read call. Manual terminal-echo verification is written up in T-111. Keep the function small: the store/validate logic already exists in T-105/T-106.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-108",
@@ -200,7 +200,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "EPIC-04 owns the cache DB, so the cache part is a hook only - do NOT create any rusqlite/schema code here (flagged as a cross-epic open question in the epic file). Touches `src/cli/commands.rs`, which T-107 also edits, hence the dependency on T-107 rather than a real logic ordering. Reuse `TokenStore::clear` from T-105; this task adds no new storage logic.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-109",
@@ -222,7 +222,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Small wiring task on top of T-105's `TokenStore::require()`. Keep `AppError::NotImplemented` as the authenticated-path outcome - this epic must not start implementing sync/add/today. Sequenced after T-108 only because all three tasks edit `src/cli/commands.rs`.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-110",
@@ -246,7 +246,7 @@
         "The whole file uses only fake tokens (`tok_fake_*`); no real credentials, and `cargo test --all` passes with no network access"
       ],
       "context": "Mirror the helpers at the top of `tests/cli.rs` (sandbox dir, env scrubbing of `RUST_LOG`/`RUST_BACKTRACE`, stdout/stderr helpers) rather than inventing a new harness. The binary needs a way to point validation at the mock server and to force keyring-unavailable in-process - use an env var seam (e.g. `TODOIST_API_BASE_URL`, `TODOIST_TUI_FORCE_FILE_TOKEN`) if T-106/T-105 already expose one; if they do not, stop and report instead of editing `src/`, since `src/` is outside this task's files.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-111",
@@ -266,7 +266,7 @@
         "Markdown lints/links are valid and the file is referenced from the EPIC-02 PR description"
       ],
       "context": "The epic's acceptance says terminal echo disabling is verified by a documented manual check - this file is that artefact. Keep it short (one page) and factual; README/user docs are EPIC-12's job, so do not duplicate installation or keybinding docs here.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }

@@ -71,3 +71,8 @@ pedantic = { level = "warn", priority = -2 }
 # production code. Return errors instead (T-003 hierarchy).
 unwrap_used = "deny"
 expect_used = "deny"
+
+[dev-dependencies]
+# HTTP mocking for T-106's wiremock-based status-mapping tests.
+wiremock = "0.6"
+
