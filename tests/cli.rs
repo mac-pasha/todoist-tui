@@ -97,7 +97,6 @@ fn today_help_shows_json_flag() {
 #[test]
 fn stubs_without_extra_args_report_not_implemented_exit_1() {
     for (args, name) in [
-        (vec!["auth"], "auth"),
         (vec!["logout"], "logout"),
         (vec!["sync"], "sync"),
         (vec!["add", "buy milk tomorrow p1"], "add"),
