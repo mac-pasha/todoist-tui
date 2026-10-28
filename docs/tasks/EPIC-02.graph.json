@@ -200,7 +200,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "EPIC-04 owns the cache DB, so the cache part is a hook only - do NOT create any rusqlite/schema code here (flagged as a cross-epic open question in the epic file). Touches `src/cli/commands.rs`, which T-107 also edits, hence the dependency on T-107 rather than a real logic ordering. Reuse `TokenStore::clear` from T-105; this task adds no new storage logic.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-109",
