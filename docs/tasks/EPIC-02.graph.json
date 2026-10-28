@@ -246,7 +246,7 @@
         "The whole file uses only fake tokens (`tok_fake_*`); no real credentials, and `cargo test --all` passes with no network access"
       ],
       "context": "Mirror the helpers at the top of `tests/cli.rs` (sandbox dir, env scrubbing of `RUST_LOG`/`RUST_BACKTRACE`, stdout/stderr helpers) rather than inventing a new harness. The binary needs a way to point validation at the mock server and to force keyring-unavailable in-process - use an env var seam (e.g. `TODOIST_API_BASE_URL`, `TODOIST_TUI_FORCE_FILE_TOKEN`) if T-106/T-105 already expose one; if they do not, stop and report instead of editing `src/`, since `src/` is outside this task's files.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-111",
