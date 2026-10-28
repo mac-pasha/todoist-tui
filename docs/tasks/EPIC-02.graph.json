@@ -266,7 +266,7 @@
         "Markdown lints/links are valid and the file is referenced from the EPIC-02 PR description"
       ],
       "context": "The epic's acceptance says terminal echo disabling is verified by a documented manual check - this file is that artefact. Keep it short (one page) and factual; README/user docs are EPIC-12's job, so do not duplicate installation or keybinding docs here.",
-      "status": "in_progress"
+      "status": "review"
     }
   ]
 }
