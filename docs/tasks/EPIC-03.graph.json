@@ -23,7 +23,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Follow the error conventions already set by `AuthError` in `src/error.rs` (thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`). Do not touch the `Secret`/`REDACTED` helper in `src/log.rs`. No HTTP code in this task - only the error type and module wiring, so the rest of the epic can land in parallel.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-202",
