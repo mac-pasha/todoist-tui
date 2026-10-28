@@ -8,21 +8,22 @@ needed to interpret it. Run it by hand once per EPIC-02 change touching `auth`,
 ## 1. Where the token is stored
 
 `todoist-tui auth` writes one entry to the platform credential store via the
-`keyring` crate (its `v1` default backend), or to a file when that store is
-unusable. The service/account pair is always `todoist-tui` / `api-token`:
+`keyring` crate (its default platform-native backends), or to a file when that
+store is unusable. The service/account pair is always `todoist-tui` / `api-token`:
 
 | Platform | Backend | Entry |
 |---|---|---|
 | macOS | Keychain (login keychain) | generic password, service `todoist-tui`, account `api-token` |
 | Linux / other Unix-likes | Secret Service over D-Bus (zbus) | item in the default (login) collection, attributes `service=todoist-tui`, `username=api-token`, label `keyring:api-token@todoist-tui` |
-| Windows | Credential Manager | generic credential, target name `api-token.todoist-tui` |
+| Windows | Credential Manager | generic credential stored by the `keyring` crate's Windows-native backend, service `todoist-tui`, user/account `api-token` (exact target-name formatting is the backend's business) |
 
 **Fallback file.** When the keyring is unavailable the token goes to
 `$XDG_CONFIG_HOME/todoist-tui/token`. `XDG_CONFIG_HOME` is honoured on every
 platform; when unset or empty the platform default applies — `~/.config/todoist-tui/token`
 on Linux, `~/Library/Application Support/com.todoist.todoist-tui/token` on macOS,
 `%APPDATA%\todoist\todoist-tui\config\token` on Windows. `auth` prints the resolved
-path in its notice, so you never have to derive it by hand.
+path in its fallback notice, so you never have to derive it by hand (nothing is
+printed when the keyring succeeds).
 
 On Unix the file is created with owner-only mode `0600` from the first `open(2)`
 call (written to a sibling temp file, then renamed into place), so a more permissive
@@ -45,7 +46,8 @@ OS keyring unavailable; falling back to token file at /home/dev/.config/todoist-
 
 Reads still consult the other backend when the primary holds nothing, so a token
 stored before a backend change is still found. `logout` clears both backends
-unconditionally.
+unconditionally — a failure clearing one backend does not prevent clearing the
+other.
 
 ## 3. Manual checklist
 
@@ -93,7 +95,8 @@ token-shaped text; step 3 prints nothing. Scripted use is
      `-w`, or search Keychain Access for `todoist-tui`.
    - Linux: `secret-tool search service todoist-tui username api-token >/dev/null`,
      then `echo $?`.
-   - Windows: `cmdkey /list`, look for `api-token.todoist-tui`.
+   - Windows: `cmdkey /list`, look for the `Generic`-type credential whose user is
+     `api-token` (the exact target name is the backend's formatting).
 4. Check the file at the path from the notice (`$XDG_CONFIG_HOME/todoist-tui/token`).
 5. Run a guarded command, e.g. `todoist-tui today`.
 
