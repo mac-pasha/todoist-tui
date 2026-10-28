@@ -35,7 +35,8 @@
       ],
       "files": [
         "src/api/model/mod.rs",
-        "src/api/model/common.rs"
+        "src/api/model/common.rs",
+        "src/api/mod.rs"
       ],
       "acceptance": [
         "`common.rs` defines serde `Deserialize`/`Serialize` types for the Sync API due object (`date`, `string`, `lang`, `is_recurring`, `timezone`) and deadline object (`date`, `lang`), each with `#[serde(default)]` on optional fields",
@@ -45,7 +46,7 @@
         "`src/api/model/mod.rs` declares `pub mod common;` and re-exports the public types; `src/api/mod.rs` is NOT modified by this task beyond nothing - if a `pub mod model;` declaration is required, stop and report rather than editing files outside this list",
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
-      "context": "These are the shapes every other resource embeds, so land them first. The epic flags due/deadline shapes as the main drift risk - keep fields `Option` and additive, never strict. Use plain `String` for timestamps (no chrono dependency in Cargo.toml); parsing into dates is a later epic's concern.",
+      "context": "These are the shapes every other resource embeds, so land them first. The epic flags due/deadline shapes as the main drift risk - keep fields `Option` and additive, never strict. Use plain `String` for timestamps (no chrono dependency in Cargo.toml); parsing into dates is a later epic's concern. [Scope amended by human decision during T-202/T-206 parallel run: src/api/mod.rs added to files so pub mod model; can be wired in, making the model tree reachable/testable within this task rather than deferred.]",
       "status": "in_progress"
     },
     {
