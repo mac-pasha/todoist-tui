@@ -46,7 +46,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "These are the shapes every other resource embeds, so land them first. The epic flags due/deadline shapes as the main drift risk - keep fields `Option` and additive, never strict. Use plain `String` for timestamps (no chrono dependency in Cargo.toml); parsing into dates is a later epic's concern.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-203",
