@@ -18,11 +18,13 @@
 pub mod file_source;
 pub mod keyring_source;
 pub mod source;
+pub mod store;
 pub mod token;
 pub mod validate;
 
 pub use file_source::FileTokenSource;
 pub use keyring_source::KeyringTokenSource;
 pub use source::{MemoryTokenSource, TokenSource};
+pub use store::TokenStore;
 pub use token::Token;
 pub use validate::{check, check_blocking, DEFAULT_BASE_URL};
