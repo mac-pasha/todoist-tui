@@ -1,13 +1,16 @@
 //! Clap CLI surface (T-007, EPIC-01; `auth` implemented in T-107, `logout`
-//! in T-108).
+//! in T-108; `sync`/`add`/`today` gated on authentication in T-109).
 //!
 //! Defines the `todoist-tui` command surface: a global `--config` override
 //! plus five subcommands (`auth`, `logout`, `sync`, `add`, `today`). `auth`
 //! routes to the real implementation in [`auth`], `logout` to [`logout`];
 //! the remaining subcommands are still stubs — [`commands::dispatch`]
-//! returns [`crate::error::AppError::NotImplemented`] for them, and so does
-//! [`run`] itself when no subcommand is given (the default TUI path, not
-//! built yet). `main` maps errors to a stderr message and exit code 1.
+//! returns [`crate::error::AppError::NotImplemented`] for them, but only
+//! after a shared guard (T-109) requires a stored token first, failing with
+//! [`crate::error::AuthError::NotAuthenticated`] otherwise; [`run`] itself
+//! returns [`crate::error::AppError::NotImplemented`] unguarded when no
+//! subcommand is given (the default TUI path, not built yet). `main` maps
+//! errors to a stderr message and exit code 1.
 //!
 //! [`build_cli`] exposes the underlying [`clap::Command`] (via
 //! [`clap::CommandFactory`]) as a plain function so CLI tests (trycmd /
