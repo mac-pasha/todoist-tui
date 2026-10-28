@@ -147,7 +147,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Parallel with the model tasks - depends only on `ApiError` from T-201. Keep this module HTTP-free and generic over the operation so the client in T-207 just wraps its request future. `rand` is not in Cargo.toml; derive jitter from an injected source (e.g. a `FnMut() -> f64` seam defaulting to a small nanotime-based scramble) rather than adding a dependency - if a dependency really is needed, stop and report.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-207",
