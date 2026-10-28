@@ -172,10 +172,29 @@ impl TokenSource for KeyringTokenSource {
             .map_err(|source| AuthError::Backend { source }.into())
     }
 
+    /// Deletes the stored token, or `Ok(())` when there is nothing to
+    /// delete *or* the backend itself is unreachable.
+    ///
+    /// Pre-existing-bug fix (found via T-110's E2E test, the first thing to
+    /// exercise `logout` on a machine with no reachable OS keychain; not
+    /// part of T-110's own scope): mirrors [`KeyringTokenSource::load`]'s
+    /// fix for T-109 — [`keyring::Error::PlatformFailure`] and
+    /// [`keyring::Error::NoStorageAccess`] are treated as "nothing to
+    /// clear in an unreachable backend," not as a hard failure, the same
+    /// way `load` treats them as "no token in an unusable backend."
+    /// Without this, `logout` failed outright on any machine with no
+    /// reachable OS keychain (headless Linux with no Secret Service
+    /// daemon, a CI box, a dev machine with the Keychain daemon down)
+    /// instead of succeeding.
     fn clear(&self) -> Result<()> {
         let entry = (self.factory)().map_err(|source| AuthError::Backend { source })?;
         match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(())
+            | Err(
+                keyring::Error::NoEntry
+                | keyring::Error::PlatformFailure(_)
+                | keyring::Error::NoStorageAccess(_),
+            ) => Ok(()),
             Err(source) => Err(AuthError::Backend { source }.into()),
         }
     }
@@ -760,19 +779,42 @@ mod unit_tests {
 
     #[test]
     fn clear_maps_backend_delete_errors_to_auth_backend_and_keeps_entry() {
-        for kind in [
-            ErrKind::PlatformFailure,
-            ErrKind::NoStorageAccess,
-            ErrKind::NotSupportedByStore,
-        ] {
+        // `PlatformFailure`/`NoStorageAccess` are intentionally excluded:
+        // mirroring the pre-existing-bug fix applied to `load` for T-109,
+        // `clear` now treats those two kinds as "nothing to clear in an
+        // unreachable backend" (`Ok(())`), not a hard error; they are
+        // covered by `clear_treats_platform_failure_and_no_storage_access_as_ok`
+        // below instead.
+        let kind = ErrKind::NotSupportedByStore;
+        let (source, backend) = scripted_source();
+        backend.seed(FAKE_A);
+        fail_once(&backend.fail_delete, kind);
+        assert_backend_error(&source.clear());
+        assert_eq!(
+            backend.raw().as_deref(),
+            Some(FAKE_A),
+            "failed delete must leave the entry in place"
+        );
+    }
+
+    #[test]
+    fn clear_treats_platform_failure_and_no_storage_access_as_ok() {
+        // Pre-existing-bug fix (found via T-110's E2E test, not part of its
+        // scope): mirrors `load`'s T-109 fix — an unreachable backend has
+        // nothing that can be cleared, so `clear` must succeed instead of
+        // erroring, the same way `load` returns `Ok(None)` instead of
+        // erroring for these same two kinds.
+        for kind in [ErrKind::PlatformFailure, ErrKind::NoStorageAccess] {
             let (source, backend) = scripted_source();
             backend.seed(FAKE_A);
             fail_once(&backend.fail_delete, kind);
-            assert_backend_error(&source.clear());
+            source
+                .clear()
+                .expect("unreachable backend: clear is Ok(())");
             assert_eq!(
                 backend.raw().as_deref(),
                 Some(FAKE_A),
-                "failed delete must leave the entry in place"
+                "a scripted delete failure must leave the fake entry in place"
             );
         }
     }
