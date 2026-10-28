@@ -10,3 +10,5 @@
 // `dead_code` in a binary crate, so allow it at module scope — same pattern
 // as `error.rs` (T-003) and `src/auth/mod.rs` (T-101).
 #![allow(dead_code)]
+
+pub mod model;
