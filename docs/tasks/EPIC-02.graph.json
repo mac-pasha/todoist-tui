@@ -222,7 +222,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Small wiring task on top of T-105's `TokenStore::require()`. Keep `AppError::NotImplemented` as the authenticated-path outcome - this epic must not start implementing sync/add/today. Sequenced after T-108 only because all three tasks edit `src/cli/commands.rs`.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-110",

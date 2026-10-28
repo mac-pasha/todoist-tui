@@ -96,18 +96,22 @@ fn today_help_shows_json_flag() {
 
 #[test]
 fn stubs_without_extra_args_report_not_implemented_exit_1() {
-    for (args, name) in [
-        (vec!["sync"], "sync"),
-        (vec!["add", "buy milk tomorrow p1"], "add"),
-        (vec!["today"], "today"),
-        (vec!["today", "--json"], "today"),
-        (vec![], "tui"),
+    // `sync`/`add`/`today` are now gated on authentication (T-109): with no
+    // token stored in this sandboxed HOME, each fails earlier with the
+    // "not authenticated" guard rather than reaching `NotImplemented`. Only
+    // the no-subcommand (`tui`) default path is unguarded and still hits
+    // `NotImplemented` directly.
+    for args in [
+        vec!["sync"],
+        vec!["add", "buy milk tomorrow p1"],
+        vec!["today"],
+        vec!["today", "--json"],
     ] {
-        let o = run(&format!("stub-{name}"), &args);
+        let o = run("stub-guarded", &args);
         assert_eq!(o.status.code(), Some(1), "args {args:?}: {}", stderr(&o));
         let err = stderr(&o);
         assert!(
-            err.contains(&format!("not implemented: {name}")),
+            err.contains("not authenticated") && err.contains("run `todoist-tui auth`"),
             "args {args:?}: {err}"
         );
         assert!(!err.contains("panicked"), "{err}");
@@ -118,6 +122,18 @@ fn stubs_without_extra_args_report_not_implemented_exit_1() {
             stdout(&o)
         );
     }
+
+    let o = run("stub-tui", &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    let err = stderr(&o);
+    assert!(err.contains("not implemented: tui"), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+    assert!(!err.contains("backtrace"), "{err}");
+    assert!(
+        stdout(&o).is_empty(),
+        "stdout should be empty: {}",
+        stdout(&o)
+    );
 }
 
 #[test]
@@ -135,16 +151,20 @@ fn add_rejects_second_positional() {
 
 #[test]
 fn add_accepts_dash_prefixed_text_after_double_dash() {
+    // T-109: with no token stored, `add` now fails at the auth guard before
+    // reaching its (still-unimplemented) body.
     let o = run("add-dash", &["add", "--", "-weird text"]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("not implemented: add"));
+    assert!(stderr(&o).contains("not authenticated"));
 }
 
 #[test]
 fn add_accepts_empty_text_without_parsing_it() {
+    // T-109: with no token stored, `add` now fails at the auth guard before
+    // reaching its (still-unimplemented) body.
     let o = run("add-empty", &["add", ""]);
     assert_eq!(o.status.code(), Some(1));
-    assert!(stderr(&o).contains("not implemented: add"));
+    assert!(stderr(&o).contains("not authenticated"));
 }
 
 #[test]
@@ -171,17 +191,15 @@ fn unknown_subcommand_is_usage_error() {
 
 #[test]
 fn config_flag_is_global_and_accepts_missing_file() {
+    // T-109: with no token stored, `sync` now fails at the auth guard
+    // before reaching `NotImplemented`, regardless of `--config` placement.
     let dir = sandbox("cfg-missing");
     let missing = dir.join("nope.toml");
     let m = missing.to_str().unwrap();
     for args in [vec!["--config", m, "sync"], vec!["sync", "--config", m]] {
         let o = run("cfg-missing", &args);
         assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
-        assert!(
-            stderr(&o).contains("not implemented: sync"),
-            "{}",
-            stderr(&o)
-        );
+        assert!(stderr(&o).contains("not authenticated"), "{}", stderr(&o));
     }
 }
 
