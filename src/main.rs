@@ -21,6 +21,9 @@ mod cli;
 /// EPIC-02).
 mod auth;
 
+/// Todoist REST API client scaffold and error vocabulary (T-201, EPIC-03).
+mod api;
+
 use std::process::ExitCode;
 
 use config::Config;
@@ -345,14 +348,15 @@ mod bootstrap_tests {
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
             // T-003 requires `mod error;`, T-004 requires `mod config;`,
             // T-006 requires `mod log;`, T-007 requires `mod cli;`, T-101
-            // requires `mod auth;`. The only other permitted lines are the
-            // cfg(test) modules below.
+            // requires `mod auth;`, T-201 requires `mod api;`. The only
+            // other permitted lines are the cfg(test) modules below.
             .filter(|l| {
                 *l != "mod error;"
                     && *l != "mod config;"
                     && *l != "mod log;"
                     && *l != "mod cli;"
                     && *l != "mod auth;"
+                    && *l != "mod api;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)
@@ -407,10 +411,11 @@ mod bootstrap_tests {
 /// production code that the tester must not edit.
 #[cfg(test)]
 mod error_tests {
-    use crate::error::{AppError, AuthError, ConfigError, LogError, Result};
+    use crate::error::{ApiError, AppError, AuthError, ConfigError, LogError, Result};
     use std::error::Error as _;
     use std::io;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     fn ioe() -> io::Error {
         io::Error::new(io::ErrorKind::PermissionDenied, "denied")
@@ -800,5 +805,559 @@ mod error_tests {
                 );
             }
         }
+    }
+
+    // ==== T-201 (EPIC-03): `ApiError` vocabulary and the `api` scaffold ====
+    //
+    // Covers acceptance items 1-5. Item 6 (fmt/clippy/test green) is proven
+    // by running the three commands, not from inside a test.
+
+    /// Fake token fixture required by acceptance item 3. Never a real
+    /// credential, and no code path may ever render it.
+    const API_FIXTURE_TOKEN: &str = "tok_fake_abc123";
+
+    /// A `reqwest::Error` built fully offline (no socket is opened): a
+    /// relative URL makes `RequestBuilder::build` fail with `Kind::Builder`.
+    /// Stands in for the opaque transport/decode sources `ApiError` wraps.
+    fn reqwest_stub_error() -> reqwest::Error {
+        reqwest::Client::new()
+            .get("::not a url")
+            .build()
+            .expect_err("a relative URL must fail to build")
+    }
+
+    /// Every `ApiError` variant with benign, non-secret payloads.
+    fn api_variants() -> Vec<ApiError> {
+        vec![
+            ApiError::Unauthorized,
+            ApiError::RateLimited { retry_after: None },
+            ApiError::RateLimited {
+                retry_after: Some(Duration::from_secs(30)),
+            },
+            ApiError::Server { status: 500 },
+            ApiError::Server { status: 503 },
+            ApiError::Transport {
+                source: reqwest_stub_error(),
+            },
+            ApiError::Decode {
+                source: reqwest_stub_error(),
+            },
+            ApiError::InsecureBaseUrl,
+            ApiError::RetriesExhausted { attempts: 3 },
+        ]
+    }
+
+    /// Acceptance item 1: `ApiError` must be `#[non_exhaustive]` +
+    /// `thiserror`-derived. `#[non_exhaustive]` is not observable from a
+    /// test body, so it is pinned from the committed source text (same
+    /// technique as `bootstrap_tests`); the variant *set* is proven at
+    /// compile time by `api_variants()`.
+    #[test]
+    fn api_error_is_non_exhaustive_and_thiserror_derived() {
+        let src = include_str!("error.rs");
+        let lines: Vec<&str> = src.lines().map(str::trim).collect();
+        let decl = lines
+            .iter()
+            .position(|l| *l == "pub enum ApiError {")
+            .expect("`pub enum ApiError {` missing from src/error.rs");
+
+        // Attributes sit immediately above the declaration (doc comments
+        // are further up).
+        let attributes: Vec<&str> = lines[..decl].iter().rev().take(3).copied().collect();
+        assert!(
+            attributes.contains(&"#[non_exhaustive]"),
+            "ApiError must be #[non_exhaustive]; preceding lines: {attributes:?}"
+        );
+        assert!(
+            attributes
+                .iter()
+                .any(|l| l.starts_with("#[derive(") && l.contains("Debug") && l.contains("Error")),
+            "ApiError must derive Debug + thiserror::Error; preceding lines: {attributes:?}"
+        );
+
+        // Every required variant name must be declared in the enum body.
+        let body: Vec<&str> = lines[decl..].to_vec();
+        for required in [
+            "Unauthorized,",
+            "RateLimited {",
+            "Server {",
+            "Transport {",
+            "Decode {",
+            "InsecureBaseUrl,",
+            "RetriesExhausted {",
+        ] {
+            assert!(
+                body.contains(&required),
+                "ApiError variant `{required}` not found in src/error.rs"
+            );
+        }
+    }
+
+    /// Anti-staleness guard for acceptance item 3: the `api_variants()`
+    /// fixture must exercise *every* variant declared in `error.rs`, so a
+    /// future variant cannot silently escape the token-leak scan. Variant
+    /// names are read from the committed source (unit- and struct-like
+    /// declarations alike) and compared with the names the fixtures produce.
+    #[test]
+    fn api_variants_fixture_covers_every_declared_variant() {
+        let src = include_str!("error.rs");
+        let lines: Vec<&str> = src.lines().map(str::trim).collect();
+        let start = lines
+            .iter()
+            .position(|l| *l == "pub enum ApiError {")
+            .expect("ApiError enum missing");
+        let mut declared: Vec<String> = Vec::new();
+        for line in &lines[start + 1..] {
+            if *line == "}" {
+                break;
+            }
+            if let Some(name) = line
+                .strip_suffix(',')
+                .or_else(|| line.strip_suffix(" {"))
+                .map(str::trim)
+            {
+                if !name.is_empty()
+                    && name.starts_with(char::is_uppercase)
+                    && name.chars().all(char::is_alphanumeric)
+                {
+                    declared.push(name.to_string());
+                }
+            }
+        }
+        assert_eq!(
+            declared.len(),
+            7,
+            "expected 7 ApiError variants, parsed {declared:?}"
+        );
+
+        // Distinct variant names exercised by the fixture set (Debug output
+        // starts with the variant name for thiserror-derived enums).
+        let mut exercised: Vec<String> = api_variants()
+            .iter()
+            .map(|v| {
+                format!("{v:?}")
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric())
+                    .collect::<String>()
+            })
+            .collect();
+        exercised.sort_unstable();
+        exercised.dedup();
+
+        let mut missing: Vec<&String> =
+            declared.iter().filter(|d| !exercised.contains(d)).collect();
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "these ApiError variants are not covered by api_variants(), so the \
+             token-leak scan would skip them: {missing:?}"
+        );
+        // ... and the fixtures add nothing that error.rs does not declare.
+        let declared_sorted = {
+            let mut d = declared.clone();
+            d.sort_unstable();
+            d
+        };
+        assert_eq!(exercised, declared_sorted);
+    }
+
+    /// Acceptance item 1: `is_retryable` must exist with that exact
+    /// signature on `ApiError`.
+    #[test]
+    fn api_error_exposes_is_retryable() {
+        let _: fn(&ApiError) -> bool = ApiError::is_retryable;
+        // And it is not a blanket allow/deny: of the 9 fixtures, exactly 5
+        // (two `RateLimited`, two `Server`, one `Transport`) are retryable.
+        let retryable = api_variants().iter().filter(|e| e.is_retryable()).count();
+        assert_eq!(retryable, 5, "expected 5 retryable fixtures of 9");
+    }
+
+    /// Acceptance item 3: no variant renders the fixture token through
+    /// `{}` or `{:?}`, bare or wrapped in `AppError::Api`.
+    #[test]
+    fn api_error_variants_never_render_fixture_token() {
+        assert_eq!(API_FIXTURE_TOKEN, "tok_fake_abc123");
+        for v in api_variants() {
+            let disp = v.to_string();
+            let dbg = format!("{v:?}");
+            assert!(
+                !disp.contains(API_FIXTURE_TOKEN),
+                "ApiError Display leaked fixture token: {disp:?}"
+            );
+            assert!(
+                !dbg.contains(API_FIXTURE_TOKEN),
+                "ApiError Debug leaked fixture token: {dbg:?}"
+            );
+
+            let wrapped = AppError::from(v);
+            let disp = wrapped.to_string();
+            let dbg = format!("{wrapped:?}");
+            assert!(
+                !disp.contains(API_FIXTURE_TOKEN),
+                "AppError::Api Display leaked fixture token: {disp:?}"
+            );
+            assert!(
+                !dbg.contains(API_FIXTURE_TOKEN),
+                "AppError::Api Debug leaked fixture token: {dbg:?}"
+            );
+        }
+    }
+
+    /// Acceptance item 3, adversarial half: the only token-adjacent surface
+    /// `ApiError` has is the opaque `reqwest::Error` source, which renders
+    /// verbatim — including the URL reqwest attached to it. The production
+    /// client must therefore keep the token out of URLs (it travels in the
+    /// `Authorization` header) and/or sanitise the source with
+    /// `reqwest::Error::without_url` before wrapping. Pinned here so the
+    /// hazard stays visible.
+    #[test]
+    fn api_error_transport_source_renders_its_url_verbatim() {
+        let source = reqwest::Client::new()
+            .get("mailto:fake.bad.scheme.invalid")
+            .build()
+            .expect_err("mailto: URLs are rejected by reqwest");
+        let rendered = ApiError::Transport { source }.to_string();
+        assert!(
+            rendered.starts_with("request to the Todoist API failed: "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("fake.bad.scheme.invalid"), "{rendered}");
+
+        // Sanitised the way the future HTTP client must: the URL (the only
+        // way a mis-built request smuggles a token into an error) is gone.
+        let sanitised = reqwest::Client::new()
+            .get("mailto:fake.bad.scheme.invalid")
+            .build()
+            .expect_err("mailto: URLs are rejected by reqwest")
+            .without_url();
+        let rendered = ApiError::Transport { source: sanitised }.to_string();
+        assert!(!rendered.contains("fake.bad.scheme.invalid"), "{rendered}");
+    }
+
+    /// Non-vacuity guard for the leak scan above: prove the
+    /// `!contains(FIXTURE_TOKEN)` technique actually detects a leak. Without
+    /// this, a typosquatted fixture constant could make the token-free test
+    /// pass forever while a real leak goes unnoticed.
+    #[test]
+    fn api_error_token_leak_scan_is_not_vacuous() {
+        let source = reqwest::Client::new()
+            .get(format!("mailto:{API_FIXTURE_TOKEN}"))
+            .build()
+            .expect_err("mailto: URLs are rejected by reqwest");
+        let rendered = ApiError::Transport { source }.to_string();
+        assert!(
+            rendered.contains(API_FIXTURE_TOKEN),
+            "the scan used by the token-free test must be able to see a leak: {rendered:?}"
+        );
+    }
+
+    /// Byte-exact Display pin (repo convention for `AuthError`), proving the
+    /// `#[error(...)]` messages carry no token slot and no `{:?}` noise.
+    #[test]
+    fn api_error_display_is_byte_exact() {
+        assert_eq!(
+            ApiError::Unauthorized.to_string(),
+            "the API token is unauthorized"
+        );
+        assert_eq!(
+            ApiError::RateLimited { retry_after: None }.to_string(),
+            "rate limited by the Todoist API"
+        );
+        assert_eq!(
+            ApiError::Server { status: 503 }.to_string(),
+            "the Todoist API returned a server error: HTTP 503"
+        );
+        assert_eq!(
+            ApiError::InsecureBaseUrl.to_string(),
+            "refusing to call the Todoist API over a non-HTTPS URL"
+        );
+        assert_eq!(
+            ApiError::RetriesExhausted { attempts: 3 }.to_string(),
+            "request to the Todoist API failed after 3 attempt(s)"
+        );
+        assert_eq!(
+            AppError::from(ApiError::RetriesExhausted { attempts: 1 }).to_string(),
+            "api: request to the Todoist API failed after 1 attempt(s)"
+        );
+    }
+
+    /// Acceptance item 4: `is_retryable` is true for `Server`,
+    /// `RateLimited` and `Transport` only, per variant.
+    #[test]
+    fn api_error_retryable_only_for_server_rate_limited_and_transport() {
+        assert!(ApiError::Server { status: 500 }.is_retryable());
+        assert!(ApiError::Server { status: 503 }.is_retryable());
+        assert!(ApiError::RateLimited { retry_after: None }.is_retryable());
+        assert!(ApiError::RateLimited {
+            retry_after: Some(Duration::from_secs(30))
+        }
+        .is_retryable());
+        assert!(ApiError::Transport {
+            source: reqwest_stub_error()
+        }
+        .is_retryable());
+
+        assert!(!ApiError::Unauthorized.is_retryable());
+        assert!(!ApiError::Decode {
+            source: reqwest_stub_error()
+        }
+        .is_retryable());
+        assert!(!ApiError::InsecureBaseUrl.is_retryable());
+        assert!(!ApiError::RetriesExhausted { attempts: 0 }.is_retryable());
+        assert!(!ApiError::RetriesExhausted { attempts: 3 }.is_retryable());
+    }
+
+    /// Independent, exhaustive oracle for acceptance item 4. Written as a
+    /// `match` on every variant (legal inside the crate even though the enum
+    /// is `#[non_exhaustive]`) so a future variant forces a deliberate
+    /// retry classification instead of silently defaulting to `false`.
+    fn expected_is_retryable(err: &ApiError) -> bool {
+        match err {
+            ApiError::Server { .. } | ApiError::RateLimited { .. } | ApiError::Transport { .. } => {
+                true
+            }
+            ApiError::Unauthorized
+            | ApiError::Decode { .. }
+            | ApiError::InsecureBaseUrl
+            | ApiError::RetriesExhausted { .. } => false,
+        }
+    }
+
+    #[test]
+    fn api_error_retryable_matches_the_full_variant_table() {
+        for v in api_variants() {
+            assert_eq!(
+                v.is_retryable(),
+                expected_is_retryable(&v),
+                "is_retryable() disagrees with the table for {v:?}"
+            );
+        }
+    }
+
+    /// Acceptance item 2: `AppError::Api(#[from] ApiError)` renders with the
+    /// documented `api: ` prefix, matching `Auth(..)`'s style.
+    #[test]
+    fn app_error_wraps_every_api_variant_with_api_prefix() {
+        for v in api_variants() {
+            let expected = format!("api: {v}");
+            let wrapped = AppError::from(v);
+            assert!(matches!(wrapped, AppError::Api(_)));
+            assert_eq!(wrapped.to_string(), expected);
+            assert!(wrapped.to_string().starts_with("api: "), "{wrapped}");
+            assert!(format!("{wrapped:?}").contains("Api"));
+        }
+    }
+
+    #[test]
+    fn api_error_propagates_via_question_mark_into_app_error() {
+        fn inner() -> std::result::Result<(), ApiError> {
+            Err(ApiError::Unauthorized)
+        }
+        fn outer() -> Result<()> {
+            inner()?;
+            Ok(())
+        }
+        let e = outer().expect_err("inner() always fails");
+        assert!(matches!(e, AppError::Api(ApiError::Unauthorized)));
+        assert_eq!(e.to_string(), "api: the API token is unauthorized");
+    }
+
+    #[test]
+    fn api_error_is_error_send_sync_static() {
+        fn assert_traits<T: std::error::Error + Send + Sync + 'static>() {}
+        assert_traits::<ApiError>();
+    }
+
+    /// Acceptance item 1 shape: only the wrapping variants expose a
+    /// `#[source]`; the unit/telemetry variants have no cause.
+    #[test]
+    fn api_error_source_chain_exposes_transport_and_decode_only() {
+        assert!(ApiError::Unauthorized.source().is_none());
+        assert!(ApiError::InsecureBaseUrl.source().is_none());
+        assert!(ApiError::Server { status: 500 }.source().is_none());
+        assert!(ApiError::RateLimited { retry_after: None }
+            .source()
+            .is_none());
+        assert!(ApiError::RetriesExhausted { attempts: 2 }
+            .source()
+            .is_none());
+
+        for wrapped in [
+            ApiError::Transport {
+                source: reqwest_stub_error(),
+            },
+            ApiError::Decode {
+                source: reqwest_stub_error(),
+            },
+        ] {
+            assert!(
+                wrapped.source().is_some(),
+                "variant must expose its cause: {wrapped:?}"
+            );
+        }
+    }
+
+    /// Display must carry the actionable context for every variant (status
+    /// code, retry attempts, the reason for refusing a scheme).
+    #[test]
+    fn api_error_display_carries_expected_context() {
+        let cases: Vec<(ApiError, &[&str])> = vec![
+            (ApiError::Unauthorized, &["unauthorized"]),
+            (
+                ApiError::RateLimited { retry_after: None },
+                &["rate limited"],
+            ),
+            (
+                ApiError::RateLimited {
+                    retry_after: Some(Duration::from_secs(30)),
+                },
+                &["rate limited"],
+            ),
+            (ApiError::Server { status: 503 }, &["503", "server error"]),
+            (
+                ApiError::Transport {
+                    source: reqwest_stub_error(),
+                },
+                &["failed"],
+            ),
+            (
+                ApiError::Decode {
+                    source: reqwest_stub_error(),
+                },
+                &["decode"],
+            ),
+            (ApiError::InsecureBaseUrl, &["non-HTTPS"]),
+            (
+                ApiError::RetriesExhausted { attempts: 3 },
+                &["attempt", "3"],
+            ),
+        ];
+        for (err, needles) in cases {
+            let disp = err.to_string();
+            assert!(!disp.is_empty(), "empty Display for {err:?}");
+            for needle in needles {
+                assert!(
+                    disp.contains(needle),
+                    "Display of {err:?} lacks {needle:?}: {disp:?}"
+                );
+            }
+        }
+    }
+
+    /// Boundary payloads must render without panicking and without losing
+    /// the number.
+    #[test]
+    fn api_error_boundary_payloads_render() {
+        for attempts in [0, 1, u32::MAX] {
+            let s = ApiError::RetriesExhausted { attempts }.to_string();
+            assert!(s.contains(&attempts.to_string()), "{s}");
+        }
+        for status in [0, 400, 499, 500, 599, u16::MAX] {
+            let s = ApiError::Server { status }.to_string();
+            assert!(s.contains(&status.to_string()), "{s}");
+        }
+        for retry_after in [
+            Duration::ZERO,
+            Duration::from_millis(1),
+            Duration::from_secs(u64::MAX),
+        ] {
+            let err = ApiError::RateLimited {
+                retry_after: Some(retry_after),
+            };
+            assert_ne!(err.to_string(), "");
+            assert!(format!("{err:?}").contains("RateLimited"));
+            assert!(err.is_retryable());
+        }
+    }
+
+    /// Acceptance item 5: `src/api/mod.rs` exists, opens with module docs and
+    /// scopes a module-level `dead_code` allow exactly like
+    /// `src/auth/mod.rs` (inner attribute, not a per-item allow).
+    #[test]
+    fn api_module_scaffold_has_docs_and_scoped_dead_code_allow() {
+        let src = include_str!("api/mod.rs");
+        let lines: Vec<&str> = src.lines().collect();
+
+        assert!(
+            lines.first().is_some_and(|l| l.starts_with("//!")),
+            "src/api/mod.rs must open with `//!` module docs"
+        );
+        let docs = lines.iter().filter(|l| l.starts_with("//!")).count();
+        assert!(docs >= 3, "thin module docs ({docs} line(s))");
+
+        let allow_idx = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("#![allow(") && l.contains("dead_code"))
+            .expect("src/api/mod.rs needs a module-level `#![allow(dead_code)]`");
+        assert!(
+            lines[allow_idx].trim_start().starts_with("#!["),
+            "the allow must be an inner attribute so it scopes the module"
+        );
+
+        // It must precede every real item (only blank lines, `//`/`//!`
+        // comments between the docs and the attribute).
+        let first_item = lines
+            .iter()
+            .position(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with("//")
+            })
+            .expect("module is not empty");
+        assert_eq!(
+            first_item, allow_idx,
+            "the module-level allow must be the first item in src/api/mod.rs"
+        );
+    }
+
+    /// Acceptance item 5: the `api` scaffold's scoping really matches
+    /// `src/auth/mod.rs` (the file the task names as the model).
+    #[test]
+    fn api_module_scaffold_mirrors_auth_module_scoping() {
+        fn module_level_dead_code_allow(src: &str) -> bool {
+            src.lines()
+                .any(|l| l.trim_start().starts_with("#![allow(") && l.contains("dead_code"))
+        }
+        assert!(
+            module_level_dead_code_allow(include_str!("auth/mod.rs")),
+            "auth/mod.rs no longer uses a module-level dead_code allow"
+        );
+        assert!(
+            module_level_dead_code_allow(include_str!("api/mod.rs")),
+            "api/mod.rs does not use the auth/mod.rs scoping pattern"
+        );
+        assert!(
+            include_str!("auth/mod.rs").starts_with("//!"),
+            "auth/mod.rs must keep opening with module docs"
+        );
+    }
+
+    /// Acceptance item 5: `src/main.rs` declares `mod api;` in the
+    /// production half (not inside a test module) and documents it.
+    #[test]
+    fn main_declares_mod_api() {
+        let src = include_str!("main.rs");
+        let production = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("main.rs has a production half");
+        assert!(
+            production.lines().any(|l| l.trim() == "mod api;"),
+            "src/main.rs must declare `mod api;` outside the test modules"
+        );
+        // The declaration is documented like `mod auth;` is.
+        let lines: Vec<&str> = production.lines().map(str::trim).collect();
+        let idx = lines
+            .iter()
+            .position(|l| *l == "mod api;")
+            .expect("`mod api;` missing");
+        assert!(
+            lines[idx - 1].starts_with("///"),
+            "`mod api;` needs a doc comment, found {:?}",
+            lines[idx - 1]
+        );
+        assert!(
+            lines[..idx].contains(&"mod auth;"),
+            "mod api; should follow the existing module declaration block"
+        );
     }
 }
