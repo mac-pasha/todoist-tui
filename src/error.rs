@@ -47,6 +47,10 @@ pub enum AppError {
     /// Authentication / API token handling failed.
     #[error("auth: {0}")]
     Auth(#[from] AuthError),
+
+    /// A call to the Todoist API (task fetch/sync, EPIC-03) failed.
+    #[error("api: {0}")]
+    Api(#[from] ApiError),
 }
 
 /// Errors raised while loading the TOML config file.
@@ -157,6 +161,77 @@ pub enum AuthError {
         #[source]
         source: io::Error,
     },
+}
+
+/// Errors raised while calling the Todoist REST API (EPIC-03).
+///
+/// No variant here may carry raw token material: the token is sent via an
+/// `Authorization` header, never interpolated into a message or URL, and
+/// every field below is either unit, a status/attempt count, a
+/// `std::time::Duration`, or an opaque transport/decode error.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum ApiError {
+    /// The API rejected the request as unauthenticated/unauthorized (401).
+    #[error("the API token is unauthorized")]
+    Unauthorized,
+
+    /// The API rate-limited the request (429). Carries the `Retry-After`
+    /// delay when the server supplied one.
+    #[error("rate limited by the Todoist API")]
+    RateLimited {
+        /// Delay the server asked the client to wait before retrying, if any.
+        retry_after: Option<std::time::Duration>,
+    },
+
+    /// The API responded with a server-side error status (5xx).
+    #[error("the Todoist API returned a server error: HTTP {status}")]
+    Server {
+        /// Raw HTTP status code returned by the API.
+        status: u16,
+    },
+
+    /// Sending the request, or the underlying connection, failed at the
+    /// transport level (DNS, TLS, timeout, connection refused, ...).
+    #[error("request to the Todoist API failed: {source}")]
+    Transport {
+        /// Underlying HTTP client/transport error.
+        #[source]
+        source: reqwest::Error,
+    },
+
+    /// The response body could not be decoded into the expected shape.
+    #[error("failed to decode the Todoist API response: {source}")]
+    Decode {
+        /// Underlying (de)serialisation error.
+        #[source]
+        source: reqwest::Error,
+    },
+
+    /// A non-HTTPS base URL was supplied to the API client. Never
+    /// constructed from user input containing the token.
+    #[error("refusing to call the Todoist API over a non-HTTPS URL")]
+    InsecureBaseUrl,
+
+    /// A request was retried until the client's retry budget was exhausted.
+    #[error("request to the Todoist API failed after {attempts} attempt(s)")]
+    RetriesExhausted {
+        /// Total number of attempts made, including the first.
+        attempts: u32,
+    },
+}
+
+impl ApiError {
+    /// Whether a fresh attempt of the same request might succeed: true for
+    /// transient failures (`Server`, `RateLimited`, `Transport`), false for
+    /// errors that will not change on retry (`Unauthorized`,
+    /// `InsecureBaseUrl`, `RetriesExhausted`, `Decode`).
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            ApiError::Server { .. } | ApiError::RateLimited { .. } | ApiError::Transport { .. }
+        )
+    }
 }
 
 /// Errors raised while initialising the logging subsystem.
