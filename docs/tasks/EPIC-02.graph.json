@@ -173,7 +173,7 @@
         "`cargo clippy --all-targets -- -D warnings` clean"
       ],
       "context": "Follow the dispatch pattern in `src/cli/commands.rs` (match on `Commands`, return `crate::error::Result<()>`; `main` prints the error and returns exit code 1). Use `crossterm` (already a dependency) for echo control - do not add `rpassword` or any new crate. Wrap the entered string in `Token::new` immediately so no bare `String` token lives beyond the read call. Manual terminal-echo verification is written up in T-111. Keep the function small: the store/validate logic already exists in T-105/T-106.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-108",
