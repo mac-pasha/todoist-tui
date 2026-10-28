@@ -484,3 +484,251 @@ mod tests {
         );
     }
 }
+
+// ---- adversarial unit tests (sdlc-unit-tester) --------------------------
+// Independent of the coder's `tests` module above: separate fake tokens,
+// byte-exact wording checks, double-trim guards and leak scans.
+
+/// Adversarial coverage with fresh fakes: wording must be byte-exact, the
+/// reader/trimmer split must not double-trim, error propagation must stay
+/// verbatim, and no token material (raw or escaped) may reach any writer.
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use crate::auth::MemoryTokenSource;
+
+    /// Store backed only by in-memory sources: no keyring, no files.
+    fn memory_store() -> TokenStore {
+        TokenStore::with_sources(
+            Box::new(MemoryTokenSource::new()),
+            Box::new(MemoryTokenSource::new()),
+        )
+    }
+
+    fn utf8(bytes: Vec<u8>) -> String {
+        String::from_utf8(bytes).expect("captured output must be utf-8")
+    }
+
+    #[test]
+    fn piped_reads_take_exactly_one_line_each_and_yield_empty_at_eof() {
+        let mut input = io::Cursor::new(b"line-one\nline-two\r\n".to_vec());
+        assert_eq!(
+            read_piped_line(&mut input).expect("first read"),
+            "line-one\n",
+            "first call must stop at the first newline"
+        );
+        // A CRLF payload stays intact: stripping is `token_from_line`'s
+        // job, so reader and trimmer must not fight over the same bytes.
+        assert_eq!(
+            read_piped_line(&mut input).expect("second read"),
+            "line-two\r\n"
+        );
+        assert_eq!(
+            read_piped_line(&mut input).expect("eof read"),
+            "",
+            "immediate EOF (empty stdin) must read as an empty line"
+        );
+    }
+
+    #[test]
+    fn token_from_line_trims_edges_and_newline_but_keeps_interior_spaces() {
+        let mut err = Vec::new();
+        let token = token_from_line("\t  tok_fake_ut_keep  inner gap \r\n", &mut err)
+            .expect("non-empty trimmed line must yield a token");
+        assert_eq!(
+            token.expose(),
+            "tok_fake_ut_keep  inner gap",
+            "leading tab, trailing spaces, CR and LF must be trimmed; the \
+             interior double space must survive"
+        );
+        let stderr_text = utf8(err);
+        assert!(
+            stderr_text.is_empty(),
+            "success must not write to stderr: {stderr_text}"
+        );
+    }
+
+    #[test]
+    fn valid_token_round_trips_store_bytes_and_confirms_without_echoing_it() {
+        const TOK: &str = "tok_fake_ut_round_trip_1a";
+        let store = memory_store();
+        let token = Token::new(TOK.to_string()).expect("fake token");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        validate_and_store(&token, &store, |_| Ok(()), &mut out, &mut err)
+            .expect("valid path must succeed");
+
+        assert_eq!(
+            store
+                .load()
+                .expect("load must succeed")
+                .expect("token must be stored")
+                .expose(),
+            TOK,
+            "store must round-trip the exact token bytes"
+        );
+        let confirmation = utf8(out);
+        assert!(
+            confirmation.contains("Token saved."),
+            "stdout confirmation missing: {confirmation}"
+        );
+        assert!(
+            !confirmation.contains(TOK),
+            "confirmation echoed the token: {confirmation}"
+        );
+        let stderr_text = utf8(err);
+        assert!(
+            stderr_text.is_empty(),
+            "injected store must produce no backend notice: {stderr_text}"
+        );
+    }
+
+    #[test]
+    fn invalid_token_fails_stores_nothing_and_prints_rejection_only() {
+        const TOK: &str = "tok_fake_ut_rejected_2b";
+        let store = memory_store();
+        let token = Token::new(TOK.to_string()).expect("fake token");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let error = validate_and_store(
+            &token,
+            &store,
+            |_| Err::<(), _>(AuthError::InvalidToken.into()),
+            &mut out,
+            &mut err,
+        )
+        .expect_err("invalid token must fail");
+
+        assert!(
+            matches!(error, AppError::Auth(AuthError::InvalidToken)),
+            "propagated error changed: {error:?}"
+        );
+        let message = utf8(err);
+        assert!(
+            message.contains("invalid token"),
+            "rejection message missing: {message}"
+        );
+        assert!(
+            !message.contains(TOK),
+            "rejection message echoed the token: {message}"
+        );
+        assert!(
+            store.load().expect("load").is_none(),
+            "nothing may be stored after a failed validation"
+        );
+        assert!(
+            !utf8(out).contains("Token saved."),
+            "no confirmation may appear on the rejected path"
+        );
+    }
+
+    #[test]
+    fn non_invalid_validation_error_propagates_verbatim_without_rejection_wording() {
+        const TOK: &str = "tok_fake_ut_down_bearer_3c";
+        let store = memory_store();
+        let token = Token::new(TOK.to_string()).expect("fake token");
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let error = validate_and_store(
+            &token,
+            &store,
+            |_| Err::<(), _>(AuthError::NotAuthenticated.into()),
+            &mut out,
+            &mut err,
+        )
+        .expect_err("a failing validation must propagate");
+
+        assert!(
+            matches!(error, AppError::Auth(AuthError::NotAuthenticated)),
+            "the original error must arrive unchanged: {error:?}"
+        );
+        let message = utf8(err);
+        assert!(
+            !message.contains("invalid token"),
+            "only InvalidToken may print the rejection message: {message}"
+        );
+        assert!(
+            store.load().expect("load").is_none(),
+            "a failed validation must never store"
+        );
+        assert!(
+            !utf8(out).contains("Token saved."),
+            "no confirmation without a successful validation"
+        );
+    }
+
+    #[test]
+    fn backend_notice_is_silent_for_none_and_verbatim_with_mode_for_some() {
+        let mut silent = Vec::new();
+        print_backend_notice(None, &mut silent);
+        assert!(silent.is_empty(), "None must write zero bytes");
+
+        let mut err = Vec::new();
+        let notice = "OS keyring unavailable; falling back to the token file at \
+                      /home/dev/.config/todoist-tui/token (mode 0600)";
+        print_backend_notice(Some(notice), &mut err);
+        let printed = utf8(err);
+        assert!(
+            printed.contains(notice),
+            "notice must be written verbatim: {printed}"
+        );
+        assert!(printed.contains("0600"), "notice must name the mode");
+        assert!(
+            printed.ends_with('\n'),
+            "notice must be newline-terminated: {printed}"
+        );
+    }
+
+    #[test]
+    fn captured_output_of_both_paths_has_no_token_material_raw_or_escaped() {
+        const VALID: &str = "tok_***fake_ut_ok_4d";
+        const INVALID: &str = "tok_***fake_ut_bad_5e";
+        let store = memory_store();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+
+        let valid = Token::new(VALID.to_string()).expect("fake token");
+        validate_and_store(&valid, &store, |_| Ok(()), &mut out, &mut err).expect("valid path");
+        let invalid = Token::new(INVALID.to_string()).expect("fake token");
+        let _ = validate_and_store(
+            &invalid,
+            &store,
+            |_| Err::<(), _>(AuthError::InvalidToken.into()),
+            &mut out,
+            &mut err,
+        );
+
+        let everything = utf8(out) + &utf8(err);
+        for secret in [VALID, INVALID] {
+            assert!(
+                !everything.contains(secret),
+                "raw token material leaked: {everything}"
+            );
+            let escaped = secret.escape_debug().to_string();
+            assert!(
+                !everything.contains(escaped.as_str()),
+                "escaped token material leaked: {everything}"
+            );
+        }
+    }
+
+    #[test]
+    fn whitespace_only_input_gets_byte_exact_message_and_no_echo() {
+        let mut err = Vec::new();
+        let result = token_from_line(" \t\r\n", &mut err);
+        assert!(
+            matches!(result, Err(AppError::Auth(AuthError::EmptyToken))),
+            "got {result:?}"
+        );
+        // Byte-exact: nothing but the fixed sentence with one newline, so
+        // no part of the rejected input is ever echoed back.
+        let message = utf8(err);
+        assert_eq!(
+            message, "empty token: no token was entered\n",
+            "stderr must be exactly the fixed message"
+        );
+    }
+}
