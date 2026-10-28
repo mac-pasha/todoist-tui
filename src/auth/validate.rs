@@ -56,9 +56,22 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// to be sent in the clear. Tests inject a local mock server's URL here
 /// instead of [`DEFAULT_BASE_URL`].
 ///
+/// **Debug-only loopback exception (scope widened for T-110, human-approved):**
+/// in a `debug_assertions` build only, `http://127.0.0.1`, `http://localhost`
+/// and `http://[::1]` are also accepted (see [`is_acceptable_base_url_scheme`]
+/// below) so the T-110 end-to-end test harness can point this function at a
+/// local `wiremock` server without TLS. This can never be reached in a
+/// release binary (the check is behind `cfg(not(debug_assertions))` in that
+/// profile, see [`is_acceptable_base_url_scheme`]), so it does not widen the
+/// production attack surface described above or in
+/// [`AuthError::InsecureBaseUrl`]'s own docs: a shipped binary still rejects
+/// every non-`https://` base URL with no exceptions whatsoever.
+///
 /// # Errors
 ///
-/// - [`AuthError::InsecureBaseUrl`] if `base_url` is not `https://`.
+/// - [`AuthError::InsecureBaseUrl`] if `base_url`'s scheme is not accepted
+///   (see [`is_acceptable_base_url_scheme`] for exactly which schemes that
+///   is, per build profile).
 /// - [`AuthError::Request`] if the HTTPS client could not be built, or the
 ///   request failed at the transport level (DNS, TLS, timeout, connection
 ///   refused, ...).
@@ -67,7 +80,7 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 /// - [`AuthError::UnexpectedStatus`] if the API returned any other
 ///   non-success status.
 pub async fn check(token: &Token, base_url: &str) -> Result<()> {
-    if !base_url.starts_with("https://") {
+    if !is_acceptable_base_url_scheme(base_url) {
         return Err(AuthError::InsecureBaseUrl.into());
     }
 
@@ -78,6 +91,32 @@ pub async fn check(token: &Token, base_url: &str) -> Result<()> {
         .map_err(|source| AuthError::Request { source })?;
 
     send_and_map(&client, token, base_url).await
+}
+
+/// Returns whether `base_url`'s scheme is acceptable to [`check`] in a
+/// release build: `https://` only, no exceptions whatsoever. This is the
+/// production security boundary described in [`AuthError::InsecureBaseUrl`]'s
+/// docs and is byte-identical to the pre-T-110 behaviour.
+#[cfg(not(debug_assertions))]
+fn is_acceptable_base_url_scheme(base_url: &str) -> bool {
+    base_url.starts_with("https://")
+}
+
+/// Debug-build-only variant of [`is_acceptable_base_url_scheme`] (scope
+/// widened for T-110, human-approved): in addition to `https://`, also
+/// accepts plain `http://` when the host is a loopback address —
+/// `http://127.0.0.1`, `http://localhost` or `http://[::1]` — so the T-110
+/// end-to-end test harness can validate against a local `wiremock` server
+/// with no TLS. This function only exists in `debug_assertions` builds (see
+/// the `cfg(not(debug_assertions))` twin above), so it can never be compiled
+/// into, let alone reached in, a release binary: the loopback relaxation
+/// does not widen the production attack surface at all.
+#[cfg(debug_assertions)]
+fn is_acceptable_base_url_scheme(base_url: &str) -> bool {
+    base_url.starts_with("https://")
+        || base_url.starts_with("http://127.0.0.1")
+        || base_url.starts_with("http://localhost")
+        || base_url.starts_with("http://[::1]")
 }
 
 /// Sends the single sync-API validation request and maps its outcome to
@@ -283,9 +322,23 @@ mod unit_tests {
         // yet an http:// base URL pointing straight at it must be refused
         // with InsecureBaseUrl and zero dials — the scheme gate has to run
         // before any socket activity.
+        //
+        // `http://127.0.0.1` itself is a debug-build-only loopback
+        // exception added for T-110 (see `is_acceptable_base_url_scheme`),
+        // so this test pins the always-on, non-loopback scheme gate against
+        // a host the T-110 exception never covers. The gate must reject
+        // (and the mock listener must never see a connection) before
+        // `check()` ever tries to resolve or dial the host, so a
+        // non-resolvable placeholder host is fine here — the port still
+        // names the live listener purely for readability.
         let token = fixture_token();
         let server = spawn_server(ServerScript::Close, Duration::from_millis(300));
-        let http_base = server.base_url.replacen("https://", "http://", 1);
+        let port = server
+            .base_url
+            .rsplit(':')
+            .next()
+            .expect("base_url has a port");
+        let http_base = format!("http://not-a-loopback-host.invalid:{port}");
 
         let err = check(&token, &http_base)
             .await

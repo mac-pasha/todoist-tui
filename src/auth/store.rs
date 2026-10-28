@@ -45,6 +45,17 @@ impl TokenStore {
     /// returns `None` — no notice is needed when the preferred backend is
     /// in use.
     ///
+    /// **Debug-only test seam (scope widened for T-110, human-approved):**
+    /// in a `debug_assertions` build only, setting the environment variable
+    /// `TODOIST_TUI_FORCE_FILE_TOKEN` to any non-empty value skips the
+    /// keyring probe entirely and takes the exact same file-primary branch
+    /// as if [`KeyringTokenSource::is_available`] had returned `false` —
+    /// this exists solely so the T-110 integration/E2E suite can
+    /// deterministically exercise the fallback path without depending on
+    /// the real OS keyring being absent on the CI/dev machine it runs on.
+    /// In a release build this variable is never read and has zero effect:
+    /// [`resolve`](Self::resolve) behaves byte-identically to before T-110.
+    ///
     /// # Errors
     ///
     /// Returns an error when the file fallback's default location cannot
@@ -53,7 +64,7 @@ impl TokenStore {
         let keyring = KeyringTokenSource::new();
         let file = FileTokenSource::default_location()?;
 
-        if keyring.is_available() {
+        if keyring_should_be_used(&keyring) {
             Ok(Self {
                 primary: Box::new(keyring),
                 secondary: Box::new(file),
@@ -138,6 +149,33 @@ impl TokenStore {
             None => Err(AppError::Auth(AuthError::NotAuthenticated)),
         }
     }
+}
+
+/// Returns whether `TokenStore::resolve` should use the OS keyring as its
+/// primary backend: the real availability probe in a release build.
+///
+/// This is the pre-T-110 behaviour, kept byte-identical.
+#[cfg(not(debug_assertions))]
+fn keyring_should_be_used(keyring: &KeyringTokenSource) -> bool {
+    keyring.is_available()
+}
+
+/// Debug-build-only variant of the keyring-choice check above (scope
+/// widened for T-110, human-approved): if the environment variable
+/// `TODOIST_TUI_FORCE_FILE_TOKEN` is set to any non-empty value, the
+/// keyring probe is skipped entirely and this reports `false`, forcing
+/// `TokenStore::resolve` down the exact same file-primary branch it would
+/// take if the real keyring were unavailable (same notice, same struct
+/// shape -- no third code path). This exists solely so the T-110
+/// integration/E2E suite can deterministically exercise the fallback path
+/// without depending on the real OS keyring being absent on whatever
+/// machine the suite runs on. Only compiled into debug builds, so it can
+/// never affect a release binary even via careful env manipulation.
+#[cfg(debug_assertions)]
+fn keyring_should_be_used(keyring: &KeyringTokenSource) -> bool {
+    let forced_to_file =
+        std::env::var("TODOIST_TUI_FORCE_FILE_TOKEN").is_ok_and(|value| !value.is_empty());
+    !forced_to_file && keyring.is_available()
 }
 
 impl std::fmt::Debug for TokenStore {

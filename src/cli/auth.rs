@@ -78,13 +78,31 @@ pub fn run_auth() -> Result<()> {
     // asking for a token we could not store anyway.
     let store = TokenStore::resolve()?;
     let token = prompt_and_read_token()?;
+    let base_url = resolve_validation_base_url();
     validate_and_store(
         &token,
         &store,
-        |token| check_blocking(token, DEFAULT_BASE_URL),
+        |token| check_blocking(token, &base_url),
         &mut io::stdout(),
         &mut io::stderr(),
     )
+}
+
+/// Resolves the base URL [`run_auth`] validates the token against: the
+/// `TODOIST_API_BASE_URL` environment variable when it is set to a
+/// non-empty value, [`DEFAULT_BASE_URL`] otherwise.
+///
+/// This exists so the T-110 end-to-end test harness can point the real
+/// `auth` subcommand at a local mock server instead of the live Todoist
+/// API (scope widened for T-110, human-approved). Setting this variable
+/// alone has no security effect: [`crate::auth::validate::check`] still
+/// enforces `https://`-only in a release build (its debug-only loopback
+/// exception is a separate, equally gated seam -- see that module's docs).
+fn resolve_validation_base_url() -> String {
+    match std::env::var("TODOIST_API_BASE_URL") {
+        Ok(value) if !value.is_empty() => value,
+        _ => DEFAULT_BASE_URL.to_string(),
+    }
 }
 
 /// Writes the prompt to stderr and reads one line of input, returning the
