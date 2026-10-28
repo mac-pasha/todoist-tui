@@ -137,11 +137,30 @@ impl std::fmt::Debug for KeyringTokenSource {
 }
 
 impl TokenSource for KeyringTokenSource {
+    /// Reads the stored token, or `Ok(None)` when there is nothing to read
+    /// *or* the backend itself is unreachable.
+    ///
+    /// Pre-existing-bug fix (found while implementing T-109, not part of
+    /// its scope): [`keyring::Error::PlatformFailure`] and
+    /// [`keyring::Error::NoStorageAccess`] are treated the same way
+    /// [`KeyringTokenSource::is_available`] already treats them — as "the
+    /// keyring backend is unusable," not as a hard failure — so `load`
+    /// agrees with `is_available`'s truth table. Without this, a caller
+    /// like [`crate::auth::TokenStore::load`] that falls back to reading
+    /// this backend as the *secondary* source (after `resolve` already
+    /// chose the file backend as primary because the keyring was
+    /// unavailable) would still hit a hard error here instead of
+    /// transparently finding "no token," turning every no-token command on
+    /// a keyring-less machine into a confusing backend error instead of
+    /// the intended "not authenticated" message.
     fn load(&self) -> Result<Option<Token>> {
         let entry = (self.factory)().map_err(|source| AuthError::Backend { source })?;
         match entry.get_password() {
             Ok(raw) => Token::new(raw).map(Some),
             Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_)) => {
+                Ok(None)
+            }
             Err(source) => Err(AuthError::Backend { source }.into()),
         }
     }
@@ -284,6 +303,62 @@ mod tests {
             Err(AppError::Auth(AuthError::Backend { .. })) => {}
             other => panic!("expected AuthError::Backend, got {other:?}"),
         }
+    }
+
+    /// Pre-existing-bug fix, discovered while implementing T-109 (not a
+    /// T-109 feature itself): `load` must agree with `is_available` that
+    /// `PlatformFailure`/`NoStorageAccess` mean "the keyring is
+    /// unreachable," returning `Ok(None)` (same as `NoEntry`) instead of a
+    /// hard `AuthError::Backend`. Without this, [`crate::auth::TokenStore`]
+    /// reading this backend as its secondary source (after `resolve`
+    /// already chose the file backend as primary for the same reason)
+    /// would surface a confusing backend error instead of "no token".
+    /// Fake [`Backend`] whose `get_password` always fails with a scripted
+    /// error, to exercise `load`'s mapping of read-time backend failures
+    /// (as opposed to the entry-construction failure the factory-closure
+    /// tests above cover).
+    struct FailingGetBackend(fn() -> keyring::Error);
+
+    impl Backend for FailingGetBackend {
+        fn get_password(&self) -> keyring::Result<String> {
+            Err((self.0)())
+        }
+
+        fn set_password(&self, _password: &str) -> keyring::Result<()> {
+            Ok(())
+        }
+
+        fn delete_credential(&self) -> keyring::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn load_treats_platform_failure_as_ok_none() {
+        let source = KeyringTokenSource::with_backend(|| {
+            Ok(Box::new(FailingGetBackend(|| {
+                keyring::Error::PlatformFailure(
+                    std::io::Error::other("fake platform failure").into(),
+                )
+            })) as Box<dyn Backend>)
+        });
+        assert!(
+            source.load().expect("must not be an error").is_none(),
+            "an unreachable keyring (platform failure) must read as no token, not an error"
+        );
+    }
+
+    #[test]
+    fn load_treats_no_storage_access_as_ok_none() {
+        let source = KeyringTokenSource::with_backend(|| {
+            Ok(Box::new(FailingGetBackend(|| {
+                keyring::Error::NoStorageAccess("fake locked store".into())
+            })) as Box<dyn Backend>)
+        });
+        assert!(
+            source.load().expect("must not be an error").is_none(),
+            "an unreachable keyring (no storage access) must read as no token, not an error"
+        );
     }
 
     #[test]
@@ -486,13 +561,19 @@ mod unit_tests {
     // ---- load: the full backend-error matrix ----
 
     #[test]
-    fn load_maps_every_read_error_kind_to_auth_backend_without_leaking() {
-        // Read failures other than `NoEntry` must surface as
-        // `AuthError::Backend`, and neither Display nor Debug of the error
-        // may echo the stored token (the module's no-leak contract).
+    fn load_maps_every_remaining_backend_error_kind_to_auth_backend_without_leaking() {
+        // Read failures other than `NoEntry`, `PlatformFailure` and
+        // `NoStorageAccess` must surface as `AuthError::Backend`, and
+        // neither Display nor Debug of the error may echo the stored token
+        // (the module's no-leak contract). `PlatformFailure` and
+        // `NoStorageAccess` are excluded from this loop: a pre-existing-bug
+        // fix (found while implementing T-109) now maps both to `Ok(None)`
+        // instead, matching `is_available`'s truth table — see
+        // `load_treats_platform_failure_as_ok_none` /
+        // `load_treats_no_storage_access_as_ok_none` in the `tests` module
+        // above and `is_available_is_false_when_the_probe_read_fails_at_platform_level`
+        // below.
         for kind in [
-            ErrKind::PlatformFailure,
-            ErrKind::NoStorageAccess,
             ErrKind::Invalid,
             ErrKind::BadEncoding,
             ErrKind::BadStoreFormat,
@@ -538,9 +619,14 @@ mod unit_tests {
         // The source rebuilds its entry handle per operation, so a retry on
         // the SAME source must succeed once the transient failure clears —
         // no poisoned state, no need to reconstruct the source.
+        // `ErrKind::Invalid` (not `PlatformFailure`): the pre-existing-bug
+        // fix found while implementing T-109 now maps `PlatformFailure` /
+        // `NoStorageAccess` to `Ok(None)` instead of a hard error, so a
+        // still-error kind is needed here to exercise "errors then
+        // recovers" rather than "immediately Ok(None)".
         let (source, backend) = scripted_source();
         backend.seed(FAKE_A);
-        fail_once(&backend.fail_get, ErrKind::PlatformFailure);
+        fail_once(&backend.fail_get, ErrKind::Invalid);
         assert_backend_error(&source.load());
         let loaded = source
             .load()
