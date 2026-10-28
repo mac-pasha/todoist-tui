@@ -85,12 +85,38 @@ pub async fn check(token: &Token, base_url: &str) -> Result<()> {
     }
 
     let client = Client::builder()
-        .https_only(true)
+        .https_only(https_only_for(base_url))
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|source| AuthError::Request { source })?;
 
     send_and_map(&client, token, base_url).await
+}
+
+/// Returns whether the `reqwest` client built for `base_url` should enforce
+/// `https_only` in a release build: always `true`, no exceptions — exactly
+/// as strict as [`is_acceptable_base_url_scheme`] itself, byte-identical to
+/// pre-T-110 behaviour.
+#[cfg(not(debug_assertions))]
+fn https_only_for(_base_url: &str) -> bool {
+    true
+}
+
+/// Debug-build-only variant of [`https_only_for`] (fixes a T-110 seam
+/// defect found by the integration tester): [`is_acceptable_base_url_scheme`]
+/// already accepts plain `http://` for the loopback exceptions below, but
+/// unconditionally building the client with `.https_only(true)` meant
+/// `reqwest` itself rejected the very request the scheme gate had just
+/// approved — the loopback exception could never actually reach a server.
+/// This mirrors the gate's own cfg-split: only relax `https_only` when
+/// `base_url` was accepted via the `http://` branch specifically (not
+/// `https://`), so an `https://` base URL in a debug build still gets the
+/// same strict client as release.
+#[cfg(debug_assertions)]
+fn https_only_for(base_url: &str) -> bool {
+    !(base_url.starts_with("http://127.0.0.1")
+        || base_url.starts_with("http://localhost")
+        || base_url.starts_with("http://[::1]"))
 }
 
 /// Returns whether `base_url`'s scheme is acceptable to [`check`] in a
