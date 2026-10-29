@@ -173,7 +173,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Mirror the proven patterns in `src/auth/validate.rs`: injectable `base_url`, `is_acceptable_base_url_scheme`-style guard, named timeout constants, token read only through `Token::expose`. Unlike the validator, build the client once and keep it in the struct. No persistence, no queueing, no endpoints other than `/sync`.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-208",
@@ -196,7 +196,7 @@
         "`cargo test --all` passes with no network access"
       ],
       "context": "Runs in parallel with T-206/T-207 since it only needs the envelope and model types. The epic flags fixture drift as a risk - add a short header comment in the JSON naming the API version (`/api/v1/sync`) and the date the shape was taken from docs.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-209",
