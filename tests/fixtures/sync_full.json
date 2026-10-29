@@ -1,0 +1,230 @@
+{
+  "_fixture": {
+    "api": "POST /api/v1/sync",
+    "shape_captured": "2026-10-29",
+    "note": "Hand-written fake full-sync response for EPIC-03 / T-208. JSON has no comments, so this object is the header: the shape is the Todoist Sync API v1 documented full-sync reply, reconciled field by field against src/api/sync.rs::SyncResponse and src/api/model/*.rs as they stand on the date above (it is NOT a captured live response, and it will need reviewing if the API drifts - the epic flags that as a risk). tests/sync_fixture.rs keeps the two in step. Every id starts with '6X4Vfake', the only email is user@example.invalid, and the sync token starts with 'fake' - no real account, address, phone number, credential or prod data appears anywhere in this file. Keys the model does not know about (_fixture, last_write_ts, live_notifications, stats, item-level duration/note_count/v2_id, due-level tz_offset/next_occurrence_date, plus a few resource-level extras) are deliberate: the model must ignore them."
+  },
+  "last_write_ts": "2024-05-01T09:00:00Z",
+  "live_notifications": [],
+  "stats": {
+    "items": 4
+  },
+  "sync_token": "fakeSyncTokenForT208Fixture0001",
+  "full_sync": true,
+  "full_sync_date_utc": "2024-05-01T09:00:00Z",
+  "temp_id_mapping": {
+    "temp-fake-0001": "6X4VfakeItm0003"
+  },
+  "sync_status": {
+    "cmd-fake-uuid-0001": "ok",
+    "cmd-fake-uuid-0002": {
+      "error_code": 21,
+      "error": "Fake command failure kept so both sync_status shapes are covered",
+      "error_tag": "unknown-field-tolerated"
+    }
+  },
+  "day_orders": {
+    "6X4VfakePrj0001": 1,
+    "6X4VfakePrj0002": 2
+  },
+  "projects": [
+    {
+      "id": "6X4VfakePrj0001",
+      "name": "Home",
+      "parent_id": null,
+      "child_order": 1,
+      "color": "berry_red",
+      "is_favorite": true,
+      "is_archived": false,
+      "is_deleted": false,
+      "view_style": "list",
+      "inbox_project": false
+    },
+    {
+      "id": "6X4VfakePrj0002",
+      "name": "Work",
+      "parent_id": "6X4VfakePrj0001",
+      "child_order": 2,
+      "color": "charcoal",
+      "is_favorite": false,
+      "is_archived": false,
+      "is_deleted": false,
+      "view_style": "board"
+    }
+  ],
+  "items": [
+    {
+      "id": "6X4VfakeItm0001",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0001",
+      "section_id": "6X4VfakeSec0001",
+      "parent_id": null,
+      "child_order": 1,
+      "content": "Buy milk",
+      "description": "Two litres, semi-skimmed",
+      "priority": 4,
+      "labels": ["errand", "home"],
+      "due": {
+        "date": "2024-05-06",
+        "string": "every Monday",
+        "lang": "en",
+        "is_recurring": true,
+        "timezone": null,
+        "tz_offset": "+01:00",
+        "next_occurrence_date": "2024-05-13"
+      },
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2024-04-28T08:15:00Z",
+      "completed_at": null,
+      "responsible_uid": null,
+      "duration": {
+        "amount": 30,
+        "unit": "minute"
+      },
+      "note_count": 1,
+      "v2_id": "6X4VfakeItmV2_0001"
+    },
+    {
+      "id": "6X4VfakeItm0002",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0001",
+      "section_id": null,
+      "parent_id": "6X4VfakeItm0001",
+      "child_order": 2,
+      "content": "Draft the quarterly report",
+      "description": "",
+      "priority": 2,
+      "labels": [],
+      "due": {
+        "date": "2024-05-20T17:00:00Z",
+        "string": "May 20 5pm",
+        "lang": "en",
+        "is_recurring": false,
+        "timezone": "Europe/Lisbon"
+      },
+      "deadline": {
+        "date": "2024-06-15",
+        "lang": "en"
+      },
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2024-04-30T11:05:00Z",
+      "completed_at": null,
+      "responsible_uid": "6X4VfakeUsr0002"
+    },
+    {
+      "id": "6X4VfakeItm0003",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0002",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 1,
+      "content": "Call the plumber",
+      "description": "",
+      "priority": 1,
+      "labels": ["errand"],
+      "due": null,
+      "deadline": null,
+      "checked": true,
+      "is_deleted": false,
+      "added_at": "2024-05-01T08:00:00Z",
+      "completed_at": "2024-05-01T08:30:00Z",
+      "responsible_uid": null
+    },
+    {
+      "id": "6X4VfakeItm0004",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0002",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 2,
+      "content": "Old scratch task",
+      "description": "",
+      "priority": 3,
+      "labels": ["home"],
+      "due": null,
+      "deadline": null,
+      "checked": false,
+      "is_deleted": true,
+      "added_at": "2024-04-20T09:00:00Z",
+      "completed_at": null,
+      "responsible_uid": null
+    }
+  ],
+  "sections": [
+    {
+      "id": "6X4VfakeSec0001",
+      "name": "Errands",
+      "project_id": "6X4VfakePrj0001",
+      "section_order": 1,
+      "is_deleted": false,
+      "is_archived": false
+    }
+  ],
+  "labels": [
+    {
+      "id": "6X4VfakeLbl0001",
+      "name": "errand",
+      "color": "blue",
+      "item_order": 1,
+      "is_favorite": false,
+      "is_deleted": false
+    },
+    {
+      "id": "6X4VfakeLbl0002",
+      "name": "home",
+      "color": "green",
+      "item_order": 2,
+      "is_favorite": true,
+      "is_deleted": false
+    }
+  ],
+  "notes": [
+    {
+      "id": "6X4VfakeNote0001",
+      "item_id": "6X4VfakeItm0001",
+      "project_id": null,
+      "content": "Fake note attached to the fake milk item",
+      "posted_at": "2024-04-29T07:00:00Z",
+      "is_deleted": false,
+      "file_attachment": {
+        "file_name": "fake-receipt.pdf",
+        "file_size": 12345,
+        "file_type": "application/pdf",
+        "file_url": "https://example.invalid/attachments/fake-receipt.pdf",
+        "resource_type": "file",
+        "file_url_expires_at": "2024-05-02T09:00:00Z"
+      },
+      "reactions": null
+    }
+  ],
+  "filters": [
+    {
+      "id": "6X4VfakeFil0001",
+      "name": "Overdue fakes",
+      "query": "overdue & #Home",
+      "color": "berry_red",
+      "item_order": 1,
+      "is_favorite": true,
+      "is_deleted": false
+    }
+  ],
+  "user": {
+    "id": "6X4VfakeUsr0001",
+    "full_name": "Ada Example",
+    "email": "user@example.invalid",
+    "color": "#ff8581",
+    "tz_info": {
+      "timezone": "Europe/Lisbon",
+      "hours": 1,
+      "minutes": 0,
+      "gmt_string": "GMT +01:00",
+      "is_dst": 1,
+      "unknown_tz_key": "tolerated-by-tz-info"
+    },
+    "premium_status": "not_premium",
+    "business_account_id": null
+  }
+}
