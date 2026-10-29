@@ -220,7 +220,7 @@
         "All tests use fake tokens only, make no real network calls, and `cargo test --all` passes"
       ],
       "context": "`wiremock = \"0.6\"` is already a dev-dependency (added for T-106); follow the mock setup style used by the `wiremock_tests` module in `src/auth/validate.rs`. Point the client at the mock server's `http://127.0.0.1:<port>` URL, which is accepted in debug builds by the loopback exception. The fixture from T-208 can be reused as the 200 body.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-210",
