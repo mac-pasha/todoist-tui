@@ -74,7 +74,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Reuse the id/priority/colour helpers from `src/api/model/common.rs` (T-202) instead of redefining them. These structs are data only - no persistence, no business rules (EPIC-04 owns storage).",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-204",
