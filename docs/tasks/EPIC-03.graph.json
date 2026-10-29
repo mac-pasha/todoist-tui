@@ -124,7 +124,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "The eight resource types are a hard acceptance item of the epic - define them as a single `const RESOURCE_TYPES: [&str; 8]` so the test and the code read from the same source. `day_orders` is a map of project id to order; keep it as a tolerant `serde_json::Map`-backed type if the shape is uncertain rather than guessing.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-206",
