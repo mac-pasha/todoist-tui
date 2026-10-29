@@ -47,7 +47,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "These are the shapes every other resource embeds, so land them first. The epic flags due/deadline shapes as the main drift risk - keep fields `Option` and additive, never strict. Use plain `String` for timestamps (no chrono dependency in Cargo.toml); parsing into dates is a later epic's concern. [Scope amended by human decision during T-202/T-206 parallel run: src/api/mod.rs added to files so pub mod model; can be wired in, making the model tree reachable/testable within this task rather than deferred.]",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-203",
@@ -148,7 +148,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Parallel with the model tasks - depends only on `ApiError` from T-201. Keep this module HTTP-free and generic over the operation so the client in T-207 just wraps its request future. `rand` is not in Cargo.toml; derive jitter from an injected source (e.g. a `FnMut() -> f64` seam defaulting to a small nanotime-based scramble) rather than adding a dependency - if a dependency really is needed, stop and report.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-207",
