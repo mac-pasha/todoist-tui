@@ -9,7 +9,10 @@
 // builders and response types here. `pub` alone does not silence
 // `dead_code` in a binary crate, so allow it at module scope — same pattern
 // as `error.rs` (T-003) and `src/auth/mod.rs` (T-101).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 pub mod model;
 pub mod retry;
+pub mod sync;
+
+pub use sync::{CommandError, CommandStatus, SyncRequest, SyncResponse, RESOURCE_TYPES};
