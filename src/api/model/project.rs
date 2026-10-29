@@ -161,17 +161,17 @@ mod tests {
     }
 
     #[test]
-    fn project_is_deleted_treats_other_non_zero_integers_as_true() {
-        // Documented leniency in `flexible_bool` (C-style truthiness): any
-        // non-zero integer is truthy, not just `1`.
-        let project: Project = serde_json::from_value(json!({
+    fn project_is_deleted_rejects_out_of_range_integers() {
+        // `flexible_bool` only accepts the legacy `0`/`1` encoding (plus
+        // real JSON booleans); any other integer is a decode error rather
+        // than being silently coerced.
+        let result: Result<Project, _> = serde_json::from_value(json!({
             "id": "proj-6",
             "name": "Legacy",
             "is_deleted": 7
-        }))
-        .unwrap();
+        }));
 
-        assert!(project.is_deleted);
+        assert!(result.is_err());
     }
 
     #[test]
