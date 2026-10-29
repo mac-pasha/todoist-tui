@@ -16,5 +16,37 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod common;
+pub mod item;
+pub mod note;
 
 pub use common::{Deadline, Due, Id, Priority, PriorityOutOfRange};
+pub use item::Item;
+pub use note::{FileAttachment, Note};
+
+use serde::{Deserialize, Deserializer};
+
+/// Deserializes a "flexible" boolean field that the Sync API sometimes
+/// encodes as a JSON boolean and sometimes as a `0`/`1` integer (seen on
+/// `checked`/`is_deleted`-style flags across resources).
+///
+/// Any other integer value is rejected rather than silently coerced.
+pub(crate) fn flexible_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrInt {
+        Bool(bool),
+        Int(i64),
+    }
+
+    match BoolOrInt::deserialize(deserializer)? {
+        BoolOrInt::Bool(value) => Ok(value),
+        BoolOrInt::Int(0) => Ok(false),
+        BoolOrInt::Int(1) => Ok(true),
+        BoolOrInt::Int(other) => Err(serde::de::Error::custom(format!(
+            "expected a boolean or 0/1 integer, got integer {other}"
+        ))),
+    }
+}
