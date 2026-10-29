@@ -11,8 +11,10 @@
 // as `error.rs` (T-003) and `src/auth/mod.rs` (T-101).
 #![allow(dead_code, unused_imports)]
 
+pub mod client;
 pub mod model;
 pub mod retry;
 pub mod sync;
 
+pub use client::SyncClient;
 pub use sync::{CommandError, CommandStatus, SyncRequest, SyncResponse, RESOURCE_TYPES};
