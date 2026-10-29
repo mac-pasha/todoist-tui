@@ -99,7 +99,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Runs in parallel with T-203; both edit `src/api/model/mod.rs`, so expect a trivial merge there. Items are the hottest struct in the app - keep it `Clone` and cheap, no owned client handles inside.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-205",
