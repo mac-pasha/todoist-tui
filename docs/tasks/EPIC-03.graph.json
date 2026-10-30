@@ -240,7 +240,7 @@
         "Uses only fake tokens and synthetic ids; markdown links resolve"
       ],
       "context": "Mirror the length and tone of `docs/manual/epic-02-auth-checks.md` - one page, factual. User-facing README content belongs to EPIC-12, do not duplicate it here.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }
