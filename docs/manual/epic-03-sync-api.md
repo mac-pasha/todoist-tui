@@ -33,9 +33,12 @@ and the test assertion cannot drift apart from each other (they can still drift
 from the real API — see §3).
 
 `SyncResponse` deserialises `sync_token`, `full_sync`, `temp_id_mapping`,
-`sync_status`, `full_sync_date_utc`, plus one array per resource type above
-(each defaulting to empty when the server omits it; `user` is `Option`). Every
-resource struct (`Project`, `Item`, `Section`, `Label`, `Note`, `Filter`,
+`sync_status`, `full_sync_date_utc`, plus one field per resource type above —
+a `Vec` for each list resource (`projects`, `items`, `sections`, `labels`,
+`notes`, `filters`), `Option<User>` for `user`, and a tolerant
+`serde_json::Map<String, Value>` for `day_orders` (its exact shape isn't
+pinned by this epic) — each defaulting to empty when the server omits it.
+Every resource struct (`Project`, `Item`, `Section`, `Label`, `Note`, `Filter`,
 `User`) and the envelope itself tolerate unknown JSON fields — a key the model
 doesn't recognise, at any level, does not fail deserialisation.
 
@@ -59,7 +62,7 @@ plaintext local mock server; this path cannot be reached in a release binary.
 | Variant | When | Retried? |
 |---|---|---|
 | `Unauthorized` | HTTP 401 or 403 | No |
-| `RateLimited { retry_after }` | HTTP 429; `retry_after` is the `Retry-After` header parsed as delta-seconds, `None` if the header is absent or not a plain non-negative integer | Yes |
+| `RateLimited { retry_after }` | HTTP 429; `retry_after` is the `Retry-After` header parsed as delta-seconds, `None` if the header is absent, not UTF-8, or not a plain non-negative integer | Yes |
 | `Server { status }` | HTTP 5xx (and, as a documented catch-all, any other unmapped non-2xx status) | Yes |
 | `Transport { source }` | the request/connection failed before a status code was available (DNS, TLS, timeout, connection refused, ...) | Yes |
 | `Decode { source }` | the response body could not be parsed into `SyncResponse` | No |
