@@ -1,0 +1,255 @@
+{
+  "epic": "EPIC-11",
+  "title": "Non-interactive CLI",
+  "source": "docs/epics/REQ-001.epics.md",
+  "tasks": [
+    {
+      "id": "T-1001",
+      "title": "Non-interactive output channel and CLI exit-code mapping",
+      "type": "code",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "src/cli/output.rs",
+        "src/cli/mod.rs",
+        "src/error.rs",
+        "src/main.rs"
+      ],
+      "acceptance": [
+        "`src/cli/output.rs` defines an `Output` writer wrapping separate stdout/stderr handles, constructible over arbitrary `std::io::Write` sinks so tests can capture output without spawning a process",
+        "`Output` exposes a `is_color_enabled()` decision that is false whenever stdout is not a TTY, `NO_COLOR` is set, or `--no-color` is passed; all one-shot subcommand printing goes through `Output` and emits no ANSI escape bytes when colour is disabled (unit test asserts the byte `0x1b` never appears in a captured buffer)",
+        "`Output` never enters the alternate screen, never installs a crossterm raw-mode guard and never touches `/dev/tty`; a unit test asserts the rendered bytes for a sample line equal the expected plain-text bytes exactly",
+        "`src/error.rs` gains a `CliError` (thiserror, `#[non_exhaustive]`) with at least `NotAuthenticated`-forwarding, `Offline`, and `Io { source }` variants plus `AppError::Cli(#[from] CliError)` rendered with a `cli: ` prefix, matching the existing `Auth(..)`/`Api(..)` style",
+        "A single `exit_code(&AppError) -> i32` mapping exists and is unit-tested: 0 is never returned for an error, authentication failures map to one dedicated non-zero code, offline/transport failures to another, usage errors stay on clap's code 2",
+        "`src/main.rs` uses `exit_code` for its process exit status instead of a hard-coded 1, and still prints the error to stderr",
+        "No token or secret value can reach the writer unredacted: a unit test formats a `CliError` chain built from a fixture token `tok_fake_abc123` and asserts the token never appears",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Foundation for the whole epic; every other command task builds on `Output` and `exit_code`. Follow the error conventions already set by `AuthError`/`ApiError` in `src/error.rs` (thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`). Never format secrets directly - use the `Secret<T>` helper in `src/log.rs` and do not modify it. `src/cli/mod.rs` only gains `pub mod output;` and the `--no-color` global flag next to the existing `--config` flag; keep clap derive style consistent with the existing `Cli`/`Commands` definitions.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1002",
+      "title": "`todoist-tui sync` one-shot sync cycle with summary line",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-1001"
+      ],
+      "files": [
+        "src/cli/sync.rs",
+        "src/cli/mod.rs",
+        "src/cli/commands.rs"
+      ],
+      "acceptance": [
+        "`run_sync` runs exactly one full sync cycle (the sync-cycle service from EPIC-06, which itself flushes the EPIC-05 write queue before pulling) and then returns; it never starts the TUI event loop",
+        "On success it prints exactly one line to stdout of the form `synced: <n> changes, last sync <RFC3339 timestamp>, <p> pending` and returns exit code 0",
+        "When the token is missing it fails before any network call with the existing not-authenticated error and the authentication exit code from `T-1001`",
+        "When the API is unreachable it reports a one-line `sync failed: offline` style message on stderr (not stdout) and returns the offline non-zero exit code; stdout stays empty",
+        "Pending count printed after a failed flush reflects the queue contents that remain, not zero (unit-tested against a fake queue/sync-service double)",
+        "`run_sync` takes its sync service, queue handle and `Output` as parameters (dependency injection) so it is testable without network or a real database",
+        "`src/cli/commands.rs` routes `Commands::Sync` to `run_sync` and the `sync` stub plus its `NotImplemented` arm are gone",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Depends in prose on the sync cycle (EPIC-06), the sync client (EPIC-03) and the cache (EPIC-04) - call their public services through traits/handles, do not reimplement HTTP or SQL here and do not add files outside `src/cli/`. `src/cli/commands.rs` already calls `require_auth` before `sync`/`add`/`today`; keep that guard. Touch only the `Sync` match arm in `commands.rs` - `T-1003` and `T-1005` edit their own arms in parallel.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1003",
+      "title": "`todoist-tui add` online path via server-side quick-add",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-1001"
+      ],
+      "files": [
+        "src/cli/add.rs",
+        "src/cli/mod.rs",
+        "src/cli/commands.rs"
+      ],
+      "acceptance": [
+        "`run_add` sends the raw quick-add text to the server-side quick-add path (REQ-001 D1) and never attempts local natural-language parsing - a unit test asserts the text is forwarded byte-for-byte, including dates like `tomorrow 5pm #Work`",
+        "On success it upserts the returned item into the cache and prints one stdout line `added: <content>` (plus the resolved due date when the server returned one), exit code 0",
+        "Exactly one command/request is produced per invocation; a unit test with a recording fake client asserts the request count is 1",
+        "A task with no explicit project goes to Inbox (the request carries no project id, or the resolved Inbox id, whichever the quick-add contract requires - asserted in a unit test)",
+        "Empty or whitespace-only text is rejected before any network call with a usage error and clap's exit code 2",
+        "`run_add` takes its client, cache handle, queue handle and `Output` by parameter so it is testable without network",
+        "`src/cli/commands.rs` routes `Commands::Add { text }` to `run_add` with the captured text; the `add` stub arm is gone",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Quick-add is server-side only (REQ-001 D1); a local parser is explicitly rejected by the epic. The `text` argument already exists on `Commands::Add` in `src/cli/mod.rs` and is currently ignored - this task consumes it. Depends in prose on the sync client (EPIC-03) and cache (EPIC-04); use their public API, add no files outside `src/cli/`. Offline behaviour is T-1004 - this task may assume the client errors out when offline.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1004",
+      "title": "`add` offline fallback: durable enqueue, \"queued (offline)\", flush-once",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-1003"
+      ],
+      "files": [
+        "src/cli/add.rs",
+        "src/cli/sync.rs"
+      ],
+      "acceptance": [
+        "When the quick-add call fails with a transport/offline error, `run_add` enqueues the raw text as a durable write-queue command (EPIC-05) instead of failing, prints `queued (offline): <text>` to stdout and returns exit code 0",
+        "The queued entry records that the text is unparsed, so a later flush re-submits it through the same server-side quick-add path rather than inventing a parsed item",
+        "Non-transport failures (401 unauthorized, 4xx validation) are NOT queued: they surface as errors with their non-zero exit code and the queue stays empty (unit-tested per error class)",
+        "Enqueue happens with a stable idempotency/uuid key, and a unit test running enqueue twice for the same invocation id asserts the queue holds exactly one entry",
+        "A later `sync` flushes the queued add exactly once: a unit test with a recording fake client asserts one request on the first flush and zero on a second flush, with the entry removed from the queue only after the server acknowledges it",
+        "A process-kill simulation (drop the handle between enqueue and flush, reopen the queue) shows the entry still present - durability is not in-memory only",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Depends in prose on the durable write queue from EPIC-05 (enqueue + flush with acknowledgement) and on the sync cycle from EPIC-06 for the flush trigger. `src/cli/sync.rs` is touched only to make the pending-count line account for queued unparsed adds. Offline must be a clean exit 0 per the epic acceptance - do not log the token or the raw error body to stdout.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1005",
+      "title": "`today` query and stable view model",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-1001"
+      ],
+      "files": [
+        "src/cli/today/mod.rs",
+        "src/cli/today/model.rs",
+        "src/cli/mod.rs",
+        "src/cli/commands.rs"
+      ],
+      "acceptance": [
+        "`run_today` reads today's tasks from the local cache only - no network call is made (unit test with a client double asserting zero requests)",
+        "`src/cli/today/model.rs` defines a `TodayRow` view model with at least id, content, project name, priority, due display string, labels and completion flag, built from cached rows",
+        "\"Today\" means due date <= end of the user's local day including overdue tasks, with the day boundary taken from an injected clock/timezone so tests are deterministic; a unit test covers overdue, due-today, due-tomorrow (excluded) and no-due (excluded)",
+        "Ordering is deterministic and documented: priority desc, then due timestamp asc, then child order, then id as final tie-break; a unit test shuffles the input rows and asserts the same output order every time",
+        "Completed and deleted cached tasks are excluded (unit-tested)",
+        "`src/cli/commands.rs` routes `Commands::Today { json }` to `run_today`, passing the flag through; rendering itself is delegated to the renderers added in T-1006/T-1007",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Depends in prose on the cache/query layer from EPIC-04 - use its public query API, do not write SQL in `src/cli/`. The `--json` flag already exists on `Commands::Today` in `src/cli/mod.rs` and is currently ignored. Keep the view model free of formatting concerns so the two renderers can be built in parallel.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1006",
+      "title": "`today` plain-text renderer for piped, scriptable output",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-1005"
+      ],
+      "files": [
+        "src/cli/today/text.rs",
+        "src/cli/today/mod.rs"
+      ],
+      "acceptance": [
+        "Renders one task per line in a documented, stable column order, with a single LF line terminator and no trailing blank line",
+        "Output contains no ANSI escapes when colour is disabled by `Output` (unit test asserts no `0x1b` byte in the rendered buffer)",
+        "Fields are separated by a fixed separator and any separator character occurring inside task content is escaped or replaced, so a line can be split reliably (unit test with content containing the separator)",
+        "Content is written as a single line: embedded newlines and carriage returns in cached content are replaced, never emitted raw (unit test)",
+        "Empty result set prints nothing to stdout and still exits 0 (no \"no tasks\" noise on the scriptable channel; any such hint goes to stderr)",
+        "Rendering a fixed `Vec<TodayRow>` twice produces byte-identical output (determinism unit test)",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Pure function from `&[TodayRow]` to bytes via the `Output` writer from T-1001 - no cache or network access here. Runs in parallel with T-1007. The golden-file test lives in T-1008; this task only needs unit-level coverage of the formatting rules.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1007",
+      "title": "`today --json` renderer with a documented stable schema",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-1005"
+      ],
+      "files": [
+        "src/cli/today/json.rs",
+        "src/cli/today/mod.rs"
+      ],
+      "acceptance": [
+        "`--json` emits a single JSON document (an object with a `tasks` array) to stdout, serialised with serde from an explicit DTO rather than the internal model, so field names are a deliberate contract",
+        "Field names are snake_case and stable; optional values are emitted as `null` rather than omitted, so consumers can rely on the key set (unit test asserts the exact key set of a row)",
+        "Output is valid JSON for the empty case (`{\"tasks\":[]}`) and for rows whose content contains quotes, backslashes and unicode; a unit test round-trips the output through `serde_json::from_str`",
+        "No ANSI escapes and no human-readable preamble are mixed into the JSON stream; stdout contains exactly the JSON document plus a trailing newline",
+        "Array order matches the deterministic ordering defined in T-1005 (unit test shares the fixture rows with the text renderer)",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "`serde`/`serde_json` are already crate dependencies (used by `src/api/model/`). Pure rendering, parallel with T-1006. Keep the DTO in this file so a future cache-model change cannot silently break the CLI contract.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1008",
+      "title": "Golden-file CLI tests for `today` text and JSON output",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-1006",
+        "T-1007"
+      ],
+      "files": [
+        "tests/fixtures/cli_today_cache.json",
+        "tests/fixtures/cli_today.golden.txt",
+        "tests/fixtures/cli_today.golden.json",
+        "tests/cli_today.rs"
+      ],
+      "acceptance": [
+        "`tests/fixtures/cli_today_cache.json` seeds a cache with at least six tasks covering overdue, due-today, due-tomorrow, no-due, completed and a task whose content contains quotes, a separator character and a unicode emoji; ids/emails are obviously synthetic (e.g. `6X4Vfake0001`, `user@example.invalid`) and no real account data or tokens appear",
+        "Running the binary with `--config` pointed at a temp dir and the seeded cache produces output byte-identical to `tests/fixtures/cli_today.golden.txt` with exit code 0",
+        "`--json` output parses with `serde_json` and is byte-identical to `tests/fixtures/cli_today.golden.json`",
+        "Both golden runs assert the captured stdout contains no `0x1b` byte (no ANSI) and no alternate-screen or cursor-control sequence, proving nothing TUI-related leaked into piped output",
+        "A clock/timezone override makes \"today\" fixed for the fixture, so the test does not break tomorrow (asserted by running the same assertion with the override set to two different fixed dates and expecting two different documented goldens or a documented single one)",
+        "Tests make no network calls and `cargo test --all` passes offline",
+        "The test documents in a comment how to regenerate the golden files"
+      ],
+      "context": "Follow the integration-test style already in `tests/cli.rs` and `tests/auth_cli.rs` (`assert_cmd`/trycmd conventions, temp config dir via the global `--config` flag). Fixtures must be fakes only (hard rule 7).",
+      "status": "todo"
+    },
+    {
+      "id": "T-1009",
+      "title": "Integration tests: add/sync offline→online cycle and exit codes",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-1002",
+        "T-1004"
+      ],
+      "files": [
+        "tests/cli_offline.rs"
+      ],
+      "acceptance": [
+        "Online `add \"buy milk\"` against a wiremock quick-add endpoint: the task is present in the cache afterwards, the mock asserts exactly one received request, exit code is 0 and stdout contains `added:`",
+        "Offline `add \"buy milk\"` (mock server stopped / unreachable base URL): exit code 0, stdout contains `queued`, and the queue file/table holds exactly one entry after the process exits (durability across processes)",
+        "A subsequent `sync` against a restarted mock flushes that entry: the mock asserts exactly one quick-add request, a second `sync` asserts zero further requests (flush-once)",
+        "`sync` while offline exits with the documented non-zero offline code and writes its message to stderr with stdout empty",
+        "`sync`/`add`/`today` with no stored token exit with the documented authentication code and never reach the network (mock asserts zero requests)",
+        "Every assertion on exit status uses the documented codes from T-1001, not ad-hoc numbers",
+        "Only fake tokens (`tok_fake_abc123`) and synthetic ids are used; no real network access; `cargo test --all` passes"
+      ],
+      "context": "`wiremock = \"0.6\"` is already a dev-dependency and `tests/sync_client.rs` shows the mock setup style. Use a temp HOME/config dir so the real keychain and user database are never touched. This is the end-to-end proof of the epic's offline acceptance bullets.",
+      "status": "todo"
+    },
+    {
+      "id": "T-1010",
+      "title": "Document the non-interactive CLI contract",
+      "type": "docs",
+      "deps": [
+        "T-1008",
+        "T-1009"
+      ],
+      "files": [
+        "docs/manual/epic-11-cli.md"
+      ],
+      "acceptance": [
+        "Documents each command (`add`, `sync`, `today`, `today --json`) with its synopsis, flags, stdout format and what goes to stderr",
+        "Documents the exit-code table (success, authentication failure, offline, usage) exactly as implemented in T-1001",
+        "Documents the `today` plain-text column order and separator/escaping rules, and the `today --json` key set as a stability contract, with a short example of each using fake data",
+        "Explains offline semantics: `add` queues and exits 0 with \"queued (offline)\", `sync` fails non-zero, and the queued add is flushed exactly once by the next successful sync",
+        "States that quick-add parsing is server-side only (REQ-001 D1) and that there is no local natural-language parser",
+        "States that these commands never enter the alternate screen and emit no colour when stdout is not a TTY",
+        "Uses only fake tokens and synthetic ids; markdown links resolve"
+      ],
+      "context": "Mirror the length and tone of `docs/manual/epic-03-sync-api.md` - one page, factual. User-facing README/packaging content belongs to EPIC-12; do not duplicate it here.",
+      "status": "todo"
+    }
+  ]
+}
