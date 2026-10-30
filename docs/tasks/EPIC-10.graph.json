@@ -43,7 +43,7 @@
         "No `unwrap`/`expect` in non-test code; `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pure, dependency-free matching logic - no cache or UI access, so it can land before EPIC-04/EPIC-07 merge. Keep the crate dependency set unchanged (no new fuzzy crate): Cargo.lock pins must not move. Crate-wide `Result<T, AppError>` applies only to fallible functions; matching itself is infallible and returns `Option`.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-903",
