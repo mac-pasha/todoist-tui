@@ -22,7 +22,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Mirror T-201 (`ApiError`) exactly: thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`. No rusqlite connection code in this task — only the error type and module wiring, so the rest of the epic can start in parallel. Do not touch the `Secret`/`REDACTED` helper in `src/log.rs`.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-302",
