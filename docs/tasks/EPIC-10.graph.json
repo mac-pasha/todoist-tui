@@ -1,0 +1,269 @@
+{
+  "epic": "EPIC-10",
+  "title": "Local search & saved filters",
+  "source": "docs/epics/REQ-001.epics.md",
+  "tasks": [
+    {
+      "id": "T-901",
+      "title": "Spike: Todoist filter query support matrix",
+      "type": "design",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "docs/manual/epic-10-filter-support.md"
+      ],
+      "acceptance": [
+        "Document lists every filter-query construct the client may encounter (`today`, `overdue`, `#project`, `@label`, `p1`..`p4`, `no date`, `no labels`, `assigned to:`, `search:`, date ranges, `&` / `|` / `!` / parentheses) with a verdict per construct: `supported-locally` or `unsupported`",
+        "For each `supported-locally` construct the doc names the cached columns/queries (EPIC-04 read layer) needed to evaluate it, without referencing file paths that do not exist yet",
+        "Document states the fallback rule explicitly: any filter whose query contains at least one `unsupported` construct is rendered as 'server-defined / unsupported' and never evaluated partially",
+        "Document fixes the grammar subset to be implemented in T-902 (token kinds, operator precedence, parenthesis handling) in a short EBNF-style block",
+        "Document records at least 6 concrete example filter queries with the expected verdict for each, to be reused verbatim as test fixtures in T-903",
+        "No production code is changed by this task"
+      ],
+      "context": "The epic explicitly flags that the Todoist filter query language is rich and needs a spike before implementation. Follow the style of the existing notes in `docs/manual/` (e.g. `epic-03-sync-api.md`). Saved filters arrive from the Sync API as the `filters` resource already modelled in `src/api/model/filter.rs` - read it for the available fields (`query`, `name`, `is_deleted`, ordering). Decide conservatively: when in doubt, mark a construct unsupported.",
+      "status": "todo"
+    },
+    {
+      "id": "T-902",
+      "title": "Fuzzy matcher core: subsequence matching and ranking",
+      "type": "code",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "src/search/mod.rs",
+        "src/search/fuzzy.rs",
+        "src/main.rs"
+      ],
+      "acceptance": [
+        "`src/search/fuzzy.rs` exposes `fn match_score(needle: &str, haystack: &str) -> Option<MatchScore>` returning `None` when the needle is not a case-insensitive subsequence of the haystack",
+        "`MatchScore` carries the numeric score plus the matched byte ranges so the UI can highlight them later",
+        "Scoring rewards contiguous runs, matches at word boundaries and prefix matches; ties are broken deterministically by shorter haystack then byte order, so ranking is stable for a fixed fixture set",
+        "Empty needle matches every haystack with a constant score; matching is Unicode-safe (no panics or byte-boundary slicing on multi-byte input, covered by a test with non-ASCII content)",
+        "`src/search/mod.rs` declares the module with module docs following the `src/api/mod.rs` pattern; `src/main.rs` declares `mod search;`",
+        "No `unwrap`/`expect` in non-test code; `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Pure, dependency-free matching logic - no cache or UI access, so it can land before EPIC-04/EPIC-07 merge. Keep the crate dependency set unchanged (no new fuzzy crate): Cargo.lock pins must not move. Crate-wide `Result<T, AppError>` applies only to fallible functions; matching itself is infallible and returns `Option`.",
+      "status": "todo"
+    },
+    {
+      "id": "T-903",
+      "title": "Filter query parser for the supported grammar subset",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-901"
+      ],
+      "files": [
+        "src/filters/mod.rs",
+        "src/filters/parse.rs",
+        "src/main.rs"
+      ],
+      "acceptance": [
+        "`src/filters/parse.rs` exposes `fn parse(query: &str) -> Result<FilterAst, Unsupported>` implementing exactly the grammar subset fixed in `docs/manual/epic-10-filter-support.md`",
+        "`FilterAst` models the boolean structure (`And`, `Or`, `Not`, parentheses) over leaf predicates (project, label, priority, date-relative, no-date, no-labels)",
+        "Any construct marked `unsupported` in the spike, any parse error, and any unknown token yield `Unsupported { reason: String }` - never a partially-parsed AST",
+        "`Unsupported` carries a short human-readable reason suitable for display in the UI (e.g. `unsupported: assigned to:`)",
+        "The 6+ example queries recorded in the spike are covered by unit tests asserting the exact supported/unsupported verdict",
+        "Operator precedence (`!` > `&` > `|`) and explicit parentheses are unit-tested against at least 3 nested examples",
+        "`src/main.rs` declares `mod filters;`; `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Parsing only - no evaluation and no cache access here, so this is unblocked by EPIC-04. Keep the parser hand-written (no new parser dependency). Follow the `thiserror` style used in `src/error.rs` for `Unsupported`; do not add a new variant to `AppError` unless the parser is actually called from a fallible app path (it is not yet).",
+      "status": "todo"
+    },
+    {
+      "id": "T-904",
+      "title": "Search over cached tasks with view scoping",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-902"
+      ],
+      "files": [
+        "src/search/query.rs",
+        "src/search/mod.rs"
+      ],
+      "acceptance": [
+        "`src/search/query.rs` exposes `fn search(items: &[SearchItem], needle: &str, scope: SearchScope) -> Vec<SearchHit>` where `SearchScope` is `CurrentView { ids }` or `All`",
+        "`SearchItem` is a thin, cache-agnostic struct (`id`, `content`, `description`, `project_id`, optional `section_id`) built from the EPIC-04 read layer, so this module does not depend on rusqlite directly",
+        "A task that matches only in its `description` and not in its `content` is returned (explicit unit test)",
+        "When both fields match, the better of the two scores is used and the matched field is reported on `SearchHit` so the UI can show where the hit was",
+        "Results are sorted by descending score with the stable tie-break from T-902; the order is asserted against a fixed fixture of at least 10 items",
+        "`SearchScope::CurrentView` restricts results to the supplied id set; `SearchScope::All` ignores it (unit-tested both ways)",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Depends on EPIC-04's cached-task read queries, which are planned in parallel and not merged yet - that is why the input is a borrowed `&[SearchItem]` slice the caller builds, not a DB handle. Keep it allocation-light: the perf test in T-908 runs this on 5k items per keystroke.",
+      "status": "todo"
+    },
+    {
+      "id": "T-905",
+      "title": "Local filter evaluation against cached tasks",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-903"
+      ],
+      "files": [
+        "src/filters/eval.rs",
+        "src/filters/mod.rs"
+      ],
+      "acceptance": [
+        "`src/filters/eval.rs` exposes `fn evaluate(ast: &FilterAst, items: &[FilterItem], today: NaiveDateLike) -> Vec<ItemId>` with the current date injected (no `now()` call inside), so tests are deterministic",
+        "`FilterItem` is a cache-agnostic struct carrying the fields the supported predicates need (project, labels, priority, due date, completed flag), mirroring the T-904 approach",
+        "Each supported leaf predicate from the spike has at least one positive and one negative unit test against a fixed fixture of tasks",
+        "Boolean composition (`&`, `|`, `!`, parentheses) is evaluated with the precedence asserted in T-903; at least 3 composite queries are unit-tested",
+        "`pub fn resolve(query: &str, ...) -> FilterResult` returns `FilterResult::Unsupported { reason }` when `parse` rejects the query, and never returns a partial result set",
+        "Deleted and completed items are excluded from results unless the query explicitly asks for them; asserted by test",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Pairs with the EPIC-04 cache reads (planned in parallel): the caller materialises `FilterItem`s from the cache and passes them in. Date-relative predicates (`today`, `overdue`) must use the injected date and the due/deadline shapes already modelled in `src/api/model/common.rs` - reuse those types rather than re-parsing date strings.",
+      "status": "todo"
+    },
+    {
+      "id": "T-906",
+      "title": "Search session state machine with escape/restore",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-904"
+      ],
+      "files": [
+        "src/search/state.rs",
+        "src/search/mod.rs"
+      ],
+      "acceptance": [
+        "`src/search/state.rs` exposes `SearchSession` with `open(previous_view, previous_selection)`, `push_char`, `pop_char`, `set_scope`, `clear`, `cancel`, `accept`",
+        "`open` snapshots the caller's view identifier and selected task id; `cancel` returns that exact snapshot so the caller can restore the previous view and selection (unit-tested)",
+        "`clear` empties the query but keeps the session open with the original snapshot intact; `cancel` from an already-empty query still closes the session",
+        "`accept` returns the currently highlighted `SearchHit` (or `None` when there are no results) for jump-to-task",
+        "Results are recomputed incrementally on every query mutation via `search()` from T-904; the highlighted index is clamped into range after every recompute (unit-tested with a shrinking result set)",
+        "Scope toggling between current-view and all re-runs the query without losing the typed text (unit-tested)",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "This is the headless half of the `/` search UX so that it is testable without a terminal; EPIC-07's app loop (planned in parallel) will own the key dispatch that drives it. Keep view/selection identifiers generic (e.g. a `ViewId` enum defined here or an opaque string) so wiring to EPIC-07's actual view type is a small adapter, not a rewrite.",
+      "status": "todo"
+    },
+    {
+      "id": "T-907",
+      "title": "TUI search prompt, incremental results list and jump-to-task",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-906"
+      ],
+      "files": [
+        "src/ui/search.rs",
+        "src/ui/mod.rs",
+        "src/ui/keymap.rs"
+      ],
+      "acceptance": [
+        "Pressing `/` opens a one-line search prompt and the task list is replaced by the ranked results list, updating on every keystroke",
+        "Result rows show task content, parent project and an indicator when the hit came from the description only; matched ranges from T-902 are highlighted",
+        "`Esc` closes the prompt and restores the exact previous view and selected task (snapshot from T-906), asserted by a rendered-buffer snapshot test before/after",
+        "`Enter` jumps to the highlighted task: the underlying view switches to that task's project and the task becomes the selection",
+        "A key toggles search scope between current view and all, and the prompt renders the active scope",
+        "The scope-toggle and search keys are registered in the keymap so the `?` help overlay lists them with no hardcoded duplicate string (asserted by test)",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Depends on the EPIC-07 TUI shell, which is planned in parallel and not merged yet - the exact module names under `src/ui/` must follow whatever EPIC-07 lands; if they differ, stop and ask rather than inventing a parallel UI structure. EPIC-07 only binds `/` to open the prompt; all matching behaviour belongs here. Reuse EPIC-07's existing buffer-snapshot test helpers rather than adding new ones.",
+      "status": "todo"
+    },
+    {
+      "id": "T-908",
+      "title": "Search keystroke latency test at 5k cached items",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-904"
+      ],
+      "files": [
+        "tests/search_perf.rs"
+      ],
+      "acceptance": [
+        "Test generates a deterministic synthetic fixture of 5000 `SearchItem`s (seeded, no network, no DB) with realistic content and description lengths",
+        "Test simulates typing a 6-character query one character at a time and measures each incremental `search()` call with `std::time::Instant`",
+        "Assertion: the p95 per-keystroke duration is below 16ms; the measured p50/p95/max are printed so CI logs show the margin",
+        "The threshold is applied only in release-equivalent conditions or with a documented debug-build multiplier, so the test is not flaky on CI debug builds",
+        "No new crate dependency is added (no criterion); `Cargo.toml` and `Cargo.lock` are unchanged",
+        "`cargo test --all` passes"
+      ],
+      "context": "The epic's acceptance demands <16ms per keystroke at 5k items. Existing integration tests live in `tests/` (see `tests/sync_client.rs`) - follow their layout and the fixture conventions in `tests/fixtures/`. Use fake task content only; never real Todoist data.",
+      "status": "todo"
+    },
+    {
+      "id": "T-909",
+      "title": "Sidebar Filters section and read-only filter view",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-905",
+        "T-907"
+      ],
+      "files": [
+        "src/ui/filters_view.rs",
+        "src/ui/sidebar.rs",
+        "src/ui/mod.rs"
+      ],
+      "acceptance": [
+        "Sidebar renders a `Filters` section listing the saved filters from the cache, ordered by the filter resource's order field, with deleted filters hidden",
+        "Selecting a filter renders its task set, evaluated locally via T-905 against cached items, in the normal task list layout",
+        "A filter whose query is `Unsupported` renders a clear 'server-defined filter - cannot be evaluated locally' message plus the reason, and shows no task rows (never a partial or wrong result set)",
+        "Filter view is read-only: every mutating key binding (add/edit/complete/delete/move/reorder/comment) is ignored while a filter view is focused and produces no command enqueue - asserted by a key-handling test that feeds each mutating key and checks no action is emitted",
+        "An empty filter result renders an explicit 'no matching tasks' empty state rather than a blank pane",
+        "Snapshot tests cover the three states: populated filter, empty filter, unsupported filter",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Depends on the EPIC-07 sidebar (planned in parallel; it reserves a Filters slot) and on the EPIC-04 cache reads for the `filters` resource modelled in `src/api/model/filter.rs`. Creating or editing filters is explicitly out of scope. If EPIC-07's final sidebar module name differs from `src/ui/sidebar.rs`, stop and ask.",
+      "status": "todo"
+    },
+    {
+      "id": "T-910",
+      "title": "Integration tests for search and filter views over a cache fixture",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-907",
+        "T-909"
+      ],
+      "files": [
+        "tests/search_filters.rs",
+        "tests/fixtures/search_cache.json"
+      ],
+      "acceptance": [
+        "Fixture seeds a cache with projects, labels, tasks (including one matching only in its description) and at least one supported and one unsupported saved filter - all fake data, no real ids or tokens",
+        "End-to-end-through-the-cache test: open search, type a query, assert the result set and ordering; assert the description-only task appears",
+        "Test: toggling scope from current view to all widens the result set for the same query",
+        "Test: `Esc` after a search restores the previous view and the previously selected task id",
+        "Test: `Enter` on a result switches the active view to that task's project with the task selected",
+        "Test: selecting the supported saved filter yields exactly the expected task ids from cache with no network call",
+        "Test: selecting the unsupported saved filter renders the unsupported indication and zero task rows",
+        "Test: each mutating key pressed in filter view leaves the write queue empty",
+        "`cargo test --all` passes"
+      ],
+      "context": "Follow the integration-test conventions already in `tests/` (`tests/sync_client.rs`, `tests/sync_fixture.rs`) and the JSON fixture style of `tests/fixtures/sync_full.json`. These tests sit on top of EPIC-04's cache and EPIC-07's app harness; use their test helpers rather than duplicating setup.",
+      "status": "todo"
+    },
+    {
+      "id": "T-911",
+      "title": "Document search and saved-filter behaviour",
+      "type": "docs",
+      "stack": "rust",
+      "deps": [
+        "T-910"
+      ],
+      "files": [
+        "docs/manual/epic-10-search-filters.md",
+        "README.md"
+      ],
+      "acceptance": [
+        "Doc describes the `/` search UX: incremental matching, what fields are searched, scope toggle, Esc/Enter behaviour",
+        "Doc explains fuzzy ranking in user terms (subsequence, case-insensitive, contiguity and prefix bonuses) with 2-3 worked examples",
+        "Doc explains saved filters: read-only, locally evaluated, and links to the support matrix in `docs/manual/epic-10-filter-support.md` for which queries are unsupported and why",
+        "Doc states the measured keystroke-latency budget and where the test that enforces it lives",
+        "README gains a short Search & filters bullet in the feature list linking to the new doc",
+        "All key bindings mentioned match the keymap registered in T-907 (no drift); `cargo test --all` still passes"
+      ],
+      "context": "Match the tone and structure of the existing `docs/manual/epic-02-auth-checks.md` and `docs/manual/epic-03-sync-api.md`. Documentation only - no code changes.",
+      "status": "todo"
+    }
+  ]
+}
