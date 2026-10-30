@@ -231,7 +231,7 @@
         "Every shell command shown is copy-pasteable and matches the commands in CLAUDE.md / `ci.yml`"
       ],
       "context": "No README.md exists in the repo yet - this creates it. Content for keybindings/config comes from EPIC-08/09 (TUI) and `src/config/model.rs`. Keep the marker comments exact: the T-1111 drift test parses them. Documentation only, no code.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-1111",
