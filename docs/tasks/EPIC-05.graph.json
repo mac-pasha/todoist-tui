@@ -1,0 +1,289 @@
+{
+  "epic": "EPIC-05",
+  "title": "Durable write queue & command execution",
+  "source": "docs/epics/REQ-001.epics.md",
+  "tasks": [
+    {
+      "id": "T-401",
+      "title": "Spike: Sync API command error classes and keep-vs-rollback matrix",
+      "type": "docs",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "docs/manual/epic-05-error-classes.md"
+      ],
+      "acceptance": [
+        "Document lists every Sync API command error class the queue must handle, each with: example `error_code`, example `error` text, class name (e.g. `NotFound`, `InvalidArgument`, `PermissionDenied`, `RateLimited`, `ServerTransient`, `Unknown`), and whether it is retryable",
+        "For each class the document states explicitly whether the optimistic local change is KEPT or ROLLED BACK, with a one-line rationale (FR-13)",
+        "Document defines the default for unrecognised `error_code` values (must be a single, stated fallback class) so the implementation has no undefined behaviour",
+        "Document states the maximum flush batch size and the rationale for it, so T-406 and its tests agree on one number",
+        "Every example payload in the document is fake (no real token, user id, email or project name)",
+        "A short `Open questions` section captures anything that could not be confirmed from the Sync API docs (e.g. recurring-task completion offline), so EPIC-06 can pick it up"
+      ],
+      "context": "This is the spike called out in the EPIC-05 risks section. It is a docs-only task: no Rust changes. Derive the classes from the Sync API error documentation plus the existing `CommandError { error_code, error, extra }` type in `src/api/sync.rs`. T-408 encodes this matrix in code and must cite this file; keep the class names stable.",
+      "status": "todo"
+    },
+    {
+      "id": "T-402",
+      "title": "Add QueueError variants and the queue module scaffold",
+      "type": "code",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "src/error.rs",
+        "src/queue/mod.rs",
+        "src/main.rs"
+      ],
+      "acceptance": [
+        "`src/error.rs` gains `QueueError` (thiserror, `#[non_exhaustive]`) with at least `Storage { source }`, `Serialize { source }`, `UnknownCommandType { kind: String }`, `UnresolvedTempId { temp_id: String }`, `CommandFailed { uuid: String, code: Option<i64>, message: String }` and `QueueFull { pending: u64 }`",
+        "`AppError` gains `Queue(#[from] QueueError)` and renders it with a `queue: ` prefix, matching the existing `Auth(..)` / `Api(..)` style",
+        "A unit test formats every `QueueError` variant with `{}` and `{:?}` and asserts the fixture token `tok_fake_abc123` and the fixture arg payload marker `secret_note_body` never appear",
+        "`QueueError::is_retryable(&self) -> bool` returns true only for `Storage`, and is unit-tested per variant",
+        "`src/queue/mod.rs` exists with module docs and re-exports, following the shape of `src/api/mod.rs`; `src/main.rs` declares `mod queue;`",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Follow the error conventions already set by `ApiError`/`AuthError` in `src/error.rs` (thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`). Never touch the `Secret`/`REDACTED` helper in `src/log.rs`. If `src/main.rs` has a bootstrap test that asserts the declared module list, update that assertion in the same task. No queue logic here - this task exists so the rest of the epic can land in parallel.",
+      "status": "todo"
+    },
+    {
+      "id": "T-403",
+      "title": "QueuedCommand model: uuid, type, args, temp_id, state",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-402"
+      ],
+      "files": [
+        "src/queue/command.rs",
+        "src/queue/mod.rs"
+      ],
+      "acceptance": [
+        "`QueuedCommand { uuid: Uuid, kind: String, args: serde_json::Value, temp_id: Option<String>, state: CommandState, attempts: u32, created_at: i64, error: Option<String> }` is defined with a constructor that generates `uuid` via `uuid::Uuid::new_v4()` exactly once at construction",
+        "`CommandState` is an enum `Pending | InFlight | Failed` with `as_str()` / `FromStr` round-tripping the lowercase strings `pending`, `in_flight`, `failed`; unit-tested both directions including an unknown string -> error",
+        "`QueuedCommand::to_sync_command()` produces the Sync API command JSON object with keys `type`, `uuid`, `args`, and `temp_id` only when `temp_id.is_some()`; asserted against a literal expected `serde_json::json!` value in a unit test",
+        "Re-serialising the same `QueuedCommand` twice yields byte-identical JSON including the same `uuid` (idempotency precondition), unit-tested",
+        "`temp_id`-carrying commands put the temp id in both the top-level `temp_id` field and leave `args` untouched; a unit test covers a `project_add` command with `temp_id`",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "The wire envelope already exists: `SyncRequest.commands` is a `Vec<serde_json::Value>` and `CommandStatus`/`CommandError` live in `src/api/sync.rs` (EPIC-03). This task only models a queued command and its JSON projection - no DB, no HTTP. `uuid` is already a dependency in Cargo.toml (v4 feature).",
+      "status": "todo"
+    },
+    {
+      "id": "T-404",
+      "title": "commands table schema and CRUD store",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-403"
+      ],
+      "files": [
+        "src/queue/schema.rs",
+        "src/queue/store.rs",
+        "src/queue/mod.rs"
+      ],
+      "acceptance": [
+        "`src/queue/schema.rs` exposes the `commands` table DDL with columns `uuid TEXT PRIMARY KEY`, `type TEXT NOT NULL`, `args TEXT NOT NULL`, `temp_id TEXT NULL`, `state TEXT NOT NULL`, `attempts INTEGER NOT NULL DEFAULT 0`, `created_at INTEGER NOT NULL`, `error TEXT NULL`, plus an index on `(state, created_at)`",
+        "The DDL is idempotent: applying it twice against the same connection succeeds and leaves one table (unit test on an in-memory rusqlite connection)",
+        "`CommandStore` offers `insert(&QueuedCommand)`, `pending(limit)` (ordered by `created_at` then `rowid`, i.e. enqueue order), `mark_in_flight(&[Uuid])`, `mark_failed(uuid, error)`, `remove(uuid)`, `referencing_temp_id(temp_id)` and `count_by_state()`",
+        "`insert` of a duplicate `uuid` is rejected (or is an explicit no-op) rather than creating a second row; unit-tested",
+        "`pending(limit)` never returns `in_flight` or `failed` rows; unit-tested with a mixed-state fixture",
+        "All rusqlite errors map to `QueueError::Storage`; no `unwrap()`/`expect()` on fallible DB calls outside tests",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Depends on the EPIC-04 SQLite cache existing (connection handling, state-dir DB file with 0600 perms, migration runner). Do NOT duplicate that: take a `&rusqlite::Connection`/`&Transaction` as a parameter and let the caller own the connection. Registering this DDL with EPIC-04's migration runner may need a one-line change in the cache module - that file is outside this task's `files`, so stop and ask before touching it. Unit tests use `Connection::open_in_memory()`.",
+      "status": "todo"
+    },
+    {
+      "id": "T-405",
+      "title": "Atomic enqueue with optimistic local apply",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-404"
+      ],
+      "files": [
+        "src/queue/enqueue.rs",
+        "src/queue/mod.rs"
+      ],
+      "acceptance": [
+        "`enqueue(conn, command, local_apply)` runs the `commands` insert and the caller-supplied optimistic cache mutation inside ONE rusqlite transaction, committing only if both succeed",
+        "If `local_apply` returns an error the transaction rolls back: a unit test asserts neither the queued row nor the mutated cache row exists afterwards (EPIC-05 acceptance: crash during enqueue leaves neither)",
+        "If the `commands` insert fails the cache mutation is likewise rolled back; unit-tested",
+        "`enqueue_many` writes an ordered batch (e.g. `project_add` with temp id A then `item_add` referencing A) in a single transaction, preserving enqueue order in `pending()` output",
+        "The enqueue API is transport-agnostic: no reqwest/`SyncClient` reference appears in `src/queue/enqueue.rs`",
+        "A unit test asserts command args are never written to logs at `info` level and that any logging of args goes through the `Secret` helper or is omitted entirely",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "This is the entry point every mutating UI action (EPIC-08/09) will call. Depends on the EPIC-04 SQLite cache existing; express the optimistic mutation as a closure/trait taking `&Transaction` so this task does not need to know EPIC-04's exact store API. Unit tests may use a throwaway table to stand in for the cache so they do not couple to EPIC-04's schema.",
+      "status": "todo"
+    },
+    {
+      "id": "T-406",
+      "title": "Batch flush: build one /sync request from pending commands",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-404",
+        "T-401"
+      ],
+      "files": [
+        "src/queue/flush.rs",
+        "src/queue/mod.rs"
+      ],
+      "acceptance": [
+        "`build_flush_batch(conn, max_batch)` returns the pending commands in enqueue order plus a `SyncRequest` whose `commands` array is their `to_sync_command()` projection in that same order",
+        "`max_batch` defaults to the documented limit from `docs/manual/epic-05-error-classes.md`; 100 pending commands produce exactly one request when the limit is >= 100, asserted in a unit test",
+        "When pending count exceeds `max_batch`, only the first `max_batch` commands (by enqueue order) are included and the rest stay `pending`; unit-tested",
+        "Commands included in the batch are marked `in_flight` with `attempts` incremented in one transaction before the request is handed to the caller; unit-tested",
+        "An empty queue yields `None` (no request built), not an empty `/sync` POST; unit-tested",
+        "The flush builder performs no HTTP itself - it returns the `SyncRequest` for the caller (EPIC-06) to send; no `SyncClient` call in this file",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Reuse `SyncRequest` from `src/api/sync.rs` (its `commands: Vec<Value>` field is skipped when empty). Scheduling (when to flush) is EPIC-06 and explicitly out of scope here. Keep `resource_types` handling explicit: state in docs whether a flush also pulls resources, defaulting to empty resource_types for a pure command submission.",
+      "status": "todo"
+    },
+    {
+      "id": "T-407",
+      "title": "temp_id_mapping resolution across cache rows and pending commands",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-404"
+      ],
+      "files": [
+        "src/queue/temp_ids.rs",
+        "src/queue/mod.rs"
+      ],
+      "acceptance": [
+        "`resolve_temp_ids(tx, &temp_id_mapping)` rewrites every occurrence of each temp id to its real id in the `args` JSON of all still-`pending`/`failed` queued commands, in one transaction",
+        "Rewriting is value-aware, not naive string replace: a unit test proves a temp id appearing as an `args` value (e.g. `project_id`) is rewritten while an unrelated string that merely contains the temp id as a substring is not",
+        "A hook is provided for rewriting cached rows (callback/trait taking `&Transaction` and the mapping) so EPIC-04's cache tables are updated in the same transaction",
+        "Scenario test: `project_add` temp id A flushed, response maps A -> real id; a still-pending `item_add` whose args reference A is rewritten, and a query asserts no row in `commands` contains A afterwards",
+        "An unknown temp id referenced by a pending command after mapping resolution yields `QueueError::UnresolvedTempId` from a `verify_no_temp_ids` check; unit-tested",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "`SyncResponse.temp_id_mapping` is already `HashMap<String, Id>` in `src/api/sync.rs`. Depends on the EPIC-04 SQLite cache existing for the row-rewrite side - keep that behind a callback so this task does not hard-code EPIC-04 table names.",
+      "status": "todo"
+    },
+    {
+      "id": "T-408",
+      "title": "Apply sync_status: drop ok commands, classify and mark failures",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-406",
+        "T-407",
+        "T-401"
+      ],
+      "files": [
+        "src/queue/status.rs",
+        "src/queue/mod.rs"
+      ],
+      "acceptance": [
+        "`apply_sync_status(tx, &batch, &sync_status, rollback)` removes every command whose status is `ok` from the `commands` table and marks every errored command `failed` with its `error` text stored in the `error` column",
+        "`classify(&CommandError) -> ErrorClass` implements the matrix from `docs/manual/epic-05-error-classes.md`, with a table-driven unit test covering one example code per class plus the documented fallback for an unknown `error_code`",
+        "Classes documented as ROLLBACK invoke the caller-supplied `rollback` hook for that command; classes documented as KEEP do not; unit-tested per class",
+        "Mixed response (one `ok`, one error) leaves the queue with exactly the failed command, in state `failed`, and `pending()` returns nothing - i.e. the failed command is out of the retry loop and does not stall the queue; unit-tested",
+        "A command that was `in_flight` but absent from `sync_status` stays queued as `pending` with its original `uuid` (ambiguous outcome -> safe re-send, idempotency preserved); unit-tested",
+        "`failed_commands()` exposes uuid, type, attempts and error message for later UI surfacing (EPIC-07), and is covered by a unit test",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "`CommandStatus` in `src/api/sync.rs` already models `ok` vs `CommandError { error_code, error, extra }`. Conflict-resolution policy is EPIC-06 and out of scope: this task only implements the per-error-class keep/rollback decision recorded in T-401. Error strings come from the server - do not log them alongside token material.",
+      "status": "todo"
+    },
+    {
+      "id": "T-409",
+      "title": "Restart recovery: requeue in_flight commands with the same uuid",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-406"
+      ],
+      "files": [
+        "src/queue/recovery.rs",
+        "src/queue/mod.rs"
+      ],
+      "acceptance": [
+        "`recover_on_start(conn)` moves every `in_flight` row back to `pending` without altering its `uuid`, `type`, `args`, `temp_id` or `created_at`, and returns the number of recovered commands",
+        "Recovered commands keep their incremented `attempts` value, and a command whose `attempts` exceeds the documented cap is marked `failed` with a `max attempts exceeded` error instead of being requeued; both unit-tested",
+        "Unit test: insert N pending commands, snapshot their uuids, drop and reopen the connection to the same on-disk DB file (tempdir), call `recover_on_start` -> the same N uuids are present in the same order",
+        "`failed` rows are never auto-requeued by recovery; unit-tested",
+        "Recovery is idempotent: calling it twice in a row returns 0 the second time and changes nothing; unit-tested",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "This is the crash-safety half of 'flushed exactly once': combined with T-408's ambiguous-outcome rule, a re-sent command reuses its original `uuid` so the server deduplicates. Depends on the EPIC-04 SQLite cache existing for the on-disk DB location; tests should open their own tempdir DB rather than reaching into EPIC-04's path helper.",
+      "status": "todo"
+    },
+    {
+      "id": "T-410",
+      "title": "Integration tests: durability across restart and exactly-once flush",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-405",
+        "T-409"
+      ],
+      "files": [
+        "tests/queue_durability.rs"
+      ],
+      "acceptance": [
+        "Test: enqueue + optimistic apply where the local apply fails -> neither a queued command nor the mutated row exists (transaction abort simulates the crash)",
+        "Test: N=5 commands enqueued, connection dropped mid-flight (rows left `in_flight`), DB reopened, `recover_on_start` run, batch flushed against a wiremock `/sync` that records every received command `uuid` -> each uuid is seen exactly once across both 'runs'",
+        "Test asserts the recorded uuids across the simulated restart are identical to the pre-restart snapshot (no regeneration)",
+        "Test: a wiremock 500 on the flush leaves all commands re-flushable with unchanged uuids and no duplicate rows",
+        "All HTTP is wiremock on 127.0.0.1; no request leaves the host and the suite passes with no network access; every token is an obvious fake (`tok_fake_*`)",
+        "`cargo test --all` passes and the suite completes in under 10s (no real sleeps - reuse the T-206 injectable sleeper seam)"
+      ],
+      "context": "Follow `tests/sync_client.rs` conventions exactly: `todoist-tui` is a binary-only crate, so integration tests pull production modules in via the `#[path]` include pattern established in `tests/sync_fixture.rs`/`tests/sync_client.rs`. Use a tempdir SQLite file for the restart simulation. `wiremock` is already a dev-dependency.",
+      "status": "todo"
+    },
+    {
+      "id": "T-411",
+      "title": "Integration tests: batching, temp id rewrite and mixed sync_status",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-406",
+        "T-407",
+        "T-408"
+      ],
+      "files": [
+        "tests/queue_flush.rs",
+        "tests/fixtures/sync_commands_mixed.json"
+      ],
+      "acceptance": [
+        "Test: 100 pending commands flush in a single `/sync` request (wiremock asserts exactly one request) and the `commands` array order matches enqueue order position-for-position",
+        "Test: batch of `project_add` (temp id A) + `item_add` referencing A; wiremock returns `temp_id_mapping` for A -> real id; after applying the response no row in `commands` and no stand-in cache row contains A",
+        "Test: mixed `sync_status` fixture (`tests/fixtures/sync_commands_mixed.json`, one `ok` + one error) -> ok command removed, failing command in state `failed` with its error message retrievable via `failed_commands()`, and the next `build_flush_batch` still returns the remaining pending commands (queue does not stall)",
+        "Test: a ROLLBACK-class error per the T-401 matrix triggers the rollback hook, a KEEP-class error does not",
+        "Test: wiremock asserts the flush request carries `Authorization: Bearer tok_fake_*` and targets the `/sync` path over the local mock base URL",
+        "The fixture contains only fake ids, names and tokens; `cargo test --all` passes"
+      ],
+      "context": "Reuse the production `SyncClient` from `src/api/client.rs` against wiremock, as `tests/sync_client.rs` does, rather than a stub. `tests/fixtures/sync_full.json` is the existing fixture style to follow for the new mixed-status fixture.",
+      "status": "todo"
+    },
+    {
+      "id": "T-412",
+      "title": "Document the write queue contract and failure handling",
+      "type": "docs",
+      "stack": "rust",
+      "deps": [
+        "T-410",
+        "T-411"
+      ],
+      "files": [
+        "docs/manual/epic-05-write-queue.md"
+      ],
+      "acceptance": [
+        "Documents the `commands` table schema (columns, index, state machine `pending -> in_flight -> pending|failed|removed`) with a state diagram in text form",
+        "Documents the enqueue contract for EPIC-08/09 callers: atomicity guarantee, where the optimistic apply hook runs, and what callers must NOT do (no HTTP, no separate transaction)",
+        "Documents the flush contract for EPIC-06: `build_flush_batch` -> send -> `resolve_temp_ids` -> `apply_sync_status`, and that scheduling lives in EPIC-06",
+        "Documents idempotency and the restart-recovery rule (same `uuid` re-sent after ambiguous failure, attempts cap behaviour)",
+        "Links to `docs/manual/epic-05-error-classes.md` for the keep-vs-rollback matrix and notes the procedure for updating it when a new `error_code` is seen in the wild",
+        "Lists the known gaps handed to EPIC-06 (conflict policy, recurring-task completion offline) under `Open questions`; contains no real tokens or personal data"
+      ],
+      "context": "Follow the structure of `docs/manual/epic-03-sync-api.md`. Docs-only task: no code changes.",
+      "status": "todo"
+    }
+  ]
+}
