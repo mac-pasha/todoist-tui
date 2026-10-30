@@ -272,7 +272,7 @@
         "Cross-links to README.md troubleshooting and to `docs/manual/epic-02-auth-checks.md` for the auth-specific checks"
       ],
       "context": "Follow the tone and structure of the existing `docs/manual/epic-02-auth-checks.md` and `epic-03-sync-api.md` (factual reference pages). The epic acceptance requires the plan to have been executed once with results recorded - leave the results table in place with a clear placeholder if execution is pending, and flag that in the PR description.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-1113",
