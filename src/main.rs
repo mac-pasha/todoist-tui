@@ -24,6 +24,9 @@ mod auth;
 /// Todoist REST API client scaffold and error vocabulary (T-201, EPIC-03).
 mod api;
 
+/// Local SQLite store scaffold and error vocabulary (T-301, EPIC-04).
+mod db;
+
 use std::process::ExitCode;
 
 use config::Config;
@@ -348,8 +351,9 @@ mod bootstrap_tests {
             .filter(|l| !l.starts_with("mod bootstrap_tests"))
             // T-003 requires `mod error;`, T-004 requires `mod config;`,
             // T-006 requires `mod log;`, T-007 requires `mod cli;`, T-101
-            // requires `mod auth;`, T-201 requires `mod api;`. The only
-            // other permitted lines are the cfg(test) modules below.
+            // requires `mod auth;`, T-201 requires `mod api;`, T-301
+            // requires `mod db;`. The only other permitted lines are the
+            // cfg(test) modules below.
             .filter(|l| {
                 *l != "mod error;"
                     && *l != "mod config;"
@@ -357,6 +361,7 @@ mod bootstrap_tests {
                     && *l != "mod cli;"
                     && *l != "mod auth;"
                     && *l != "mod api;"
+                    && *l != "mod db;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)

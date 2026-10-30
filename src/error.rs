@@ -51,6 +51,10 @@ pub enum AppError {
     /// A call to the Todoist API (task fetch/sync, EPIC-03) failed.
     #[error("api: {0}")]
     Api(#[from] ApiError),
+
+    /// The local SQLite store (open, migrate, read/write, EPIC-04) failed.
+    #[error("db: {0}")]
+    Db(#[from] DbError),
 }
 
 /// Errors raised while loading the TOML config file.
@@ -257,4 +261,187 @@ pub enum LogError {
         /// Underlying OS error.
         source: io::Error,
     },
+}
+
+/// Errors raised by the local SQLite store (EPIC-04).
+///
+/// No variant here may carry raw secret material: paths and schema version
+/// numbers only, plus opaque `rusqlite`/decode source errors.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum DbError {
+    /// The SQLite database file could not be opened (or created).
+    #[error("failed to open database {path}: {source}")]
+    Open {
+        /// Database file that could not be opened.
+        path: PathBuf,
+        /// Underlying `rusqlite` error.
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    /// A schema migration step failed partway through.
+    #[error("failed to migrate database schema from version {from} to {to}: {source}")]
+    Migrate {
+        /// Schema version migrated from.
+        from: i32,
+        /// Schema version migration was attempting to reach.
+        to: i32,
+        /// Underlying `rusqlite` error.
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    /// The database's on-disk schema version is newer (or otherwise
+    /// incompatible) than what this build of `todoist-tui` supports.
+    #[error("unsupported database schema version {found} (this build supports up to {supported})")]
+    UnsupportedSchemaVersion {
+        /// Schema version found on disk.
+        found: i32,
+        /// Highest schema version this build knows how to read/migrate.
+        supported: i32,
+    },
+
+    /// A SQLite query or statement failed outside of open/migrate.
+    #[error("database query failed: {source}")]
+    Sqlite {
+        /// Underlying `rusqlite` error.
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    /// A stored row's payload (e.g. JSON) could not be decoded into the
+    /// expected shape.
+    #[error("failed to decode database row: {source}")]
+    Decode {
+        /// Underlying (de)serialisation error.
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// The database file (or its parent directory) does not have the
+    /// permissions required to read/write it.
+    #[error("insufficient permissions for database file {path}")]
+    Permissions {
+        /// Database file with the permission problem.
+        path: PathBuf,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fixture token used only to assert it never leaks through error
+    /// rendering; never a real credential.
+    const FIXTURE_TOKEN: &str = "tok_fake_abc123";
+
+    fn sample_db_errors() -> Vec<DbError> {
+        vec![
+            DbError::Open {
+                path: PathBuf::from("/tmp/todoist-tui/db.sqlite"),
+                source: rusqlite::Error::InvalidQuery,
+            },
+            DbError::Migrate {
+                from: 1,
+                to: 2,
+                source: rusqlite::Error::InvalidQuery,
+            },
+            DbError::UnsupportedSchemaVersion {
+                found: 99,
+                supported: 2,
+            },
+            DbError::Sqlite {
+                source: rusqlite::Error::InvalidQuery,
+            },
+            DbError::Decode {
+                source: serde_json::from_str::<serde_json::Value>("{").unwrap_err(),
+            },
+            DbError::Permissions {
+                path: PathBuf::from("/tmp/todoist-tui/db.sqlite"),
+            },
+        ]
+    }
+
+    #[test]
+    fn db_error_variants_never_leak_the_fixture_token() {
+        for err in sample_db_errors() {
+            let display = format!("{err}");
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(FIXTURE_TOKEN),
+                "Display leaked fixture token: {display}"
+            );
+            assert!(
+                !debug.contains(FIXTURE_TOKEN),
+                "Debug leaked fixture token: {debug}"
+            );
+        }
+    }
+
+    #[test]
+    fn app_error_db_has_db_prefix_and_from_conversion() {
+        let app: AppError = DbError::UnsupportedSchemaVersion {
+            found: 9,
+            supported: 2,
+        }
+        .into();
+        assert!(matches!(app, AppError::Db(_)));
+        let shown = app.to_string();
+        assert!(shown.starts_with("db: "), "got {shown}");
+        assert!(shown.contains("version 9"), "got {shown}");
+        assert!(shown.contains("up to 2"), "got {shown}");
+    }
+
+    #[test]
+    fn app_error_db_prefix_holds_for_every_variant_without_token() {
+        for err in sample_db_errors() {
+            let inner = err.to_string();
+            let app = AppError::from(err);
+            assert_eq!(app.to_string(), format!("db: {inner}"));
+            assert!(!app.to_string().contains(FIXTURE_TOKEN));
+            assert!(!format!("{app:?}").contains(FIXTURE_TOKEN));
+        }
+    }
+
+    #[test]
+    fn db_error_display_includes_expected_fields() {
+        let open = DbError::Open {
+            path: PathBuf::from("/tmp/x/db.sqlite"),
+            source: rusqlite::Error::InvalidQuery,
+        }
+        .to_string();
+        assert!(open.contains("/tmp/x/db.sqlite"));
+        let mig = DbError::Migrate {
+            from: 3,
+            to: 4,
+            source: rusqlite::Error::InvalidQuery,
+        }
+        .to_string();
+        assert!(mig.contains('3') && mig.contains('4'));
+        let perm = DbError::Permissions {
+            path: PathBuf::from("/tmp/x/db.sqlite"),
+        }
+        .to_string();
+        assert!(perm.contains("/tmp/x/db.sqlite"));
+        let dec = DbError::Decode {
+            source: serde_json::from_str::<serde_json::Value>("{").unwrap_err(),
+        }
+        .to_string();
+        assert!(dec.starts_with("failed to decode"));
+    }
+
+    #[test]
+    fn db_error_source_chain_exposes_underlying_error() {
+        use std::error::Error as _;
+        let errs = sample_db_errors();
+        for err in &errs {
+            match err {
+                DbError::UnsupportedSchemaVersion { .. } | DbError::Permissions { .. } => {
+                    assert!(err.source().is_none());
+                }
+                _ => assert!(err.source().is_some(), "missing source for {err:?}"),
+            }
+        }
+    }
 }
