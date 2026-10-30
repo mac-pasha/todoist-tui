@@ -1,0 +1,324 @@
+{
+  "epic": "EPIC-09",
+  "title": "Project, section & label management",
+  "source": "docs/epics/REQ-001.epics.md",
+  "tasks": [
+    {
+      "id": "T-801",
+      "title": "Spike: document real Sync API cascade semantics for project/section delete and archive",
+      "type": "docs",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "docs/manual/epic-09-cascade-semantics.md"
+      ],
+      "acceptance": [
+        "Document states, per command (`project_delete`, `project_archive`, `project_unarchive`, `section_delete`, `label_delete`), what the server does to the resources below it: items of a deleted project, items and sub-projects of an archived project, items of a deleted section, and label references on items after `label_delete`",
+        "Each statement is backed by evidence: either a captured (token-free, id-anonymised) `/sync` response snippet or an explicit citation of the Todoist Sync API docs section",
+        "Document names the exact local optimistic rule the code must implement for each case, in the form `on <command> -> <rows affected locally>` (e.g. `on section_delete -> items with that section_id are deleted locally`)",
+        "Any case that could not be verified is listed under `## Unverified` with the conservative fallback rule to implement (prefer 'wait for the next sync delta' over guessing a cascade)",
+        "No real API token, account id or personal project/task content appears anywhere in the document"
+      ],
+      "context": "This is the open risk named in EPIC-09 ('server-side cascade semantics ... must be verified against the real API before finalising local optimistic behaviour'). It gates T-806. Follow the style of the existing manual notes in `docs/manual/epic-03-sync-api.md`. Use fake ids (`6X7...`-style placeholders) only; see hard rule 7 on fixture data.",
+      "status": "todo"
+    },
+    {
+      "id": "T-802",
+      "title": "Structure command builders for project, section and label mutations",
+      "type": "code",
+      "stack": "rust",
+      "deps": [],
+      "files": [
+        "src/structure/mod.rs",
+        "src/structure/command.rs",
+        "src/error.rs",
+        "src/main.rs"
+      ],
+      "acceptance": [
+        "`src/structure/command.rs` exposes pure constructor functions for every structure command in scope: `project_add`, `project_update` (rename), `project_archive`, `project_unarchive`, `project_delete`, `section_add`, `section_update`, `section_reorder`, `section_delete`, `label_add`, `label_update`, `label_delete`",
+        "Each constructor returns the queue command type introduced by the write-queue epic (EPIC-05) with a freshly generated v4 `uuid`; `project_add`, `section_add` and `label_add` additionally carry a fresh `temp_id`; two calls to the same constructor never produce equal `uuid`s (unit-tested)",
+        "`project_add` accepts an optional `parent_id` and serialises it only when present, so top-level projects do not send a null parent (asserted on the serialised args JSON)",
+        "`project_archive` and `project_delete` serialise to distinct command `type` strings; a unit test asserts the two are never interchangeable",
+        "`src/error.rs` gains a `StructureError` enum (thiserror, `#[non_exhaustive]`) with at least `EmptyName`, `NameTooLong { len: usize }`, `UnknownProject { id: String }`, `UnknownSection { id: String }`, `UnknownLabel { id: String }`, and `AppError` gains `Structure(#[from] StructureError)` rendered with a `structure: ` prefix like the existing variants",
+        "Name validation (non-empty after trim, length bound) is applied in the constructors and returns `StructureError`, never panics",
+        "`src/main.rs` declares `mod structure;`",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Pure command construction only - no cache writes, no enqueue, no UI, so the rest of the epic can land in parallel. Follow the error conventions set by `ApiError`/`AuthError` in `src/error.rs` and the module-doc style of `src/api/mod.rs`. Reuse the Sync command/args types and the uuid+temp_id helpers from the write-queue epic (EPIC-05) rather than redefining them; if that type is not merged yet, stop and ask rather than duplicating it. Never touch the `Secret`/`REDACTED` helper in `src/log.rs`.",
+      "status": "todo"
+    },
+    {
+      "id": "T-803",
+      "title": "Project actions: add (incl. sub-project), rename, archive, delete",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-802"
+      ],
+      "files": [
+        "src/structure/project.rs",
+        "src/structure/mod.rs"
+      ],
+      "acceptance": [
+        "`src/structure/project.rs` exposes `add`, `add_child`, `rename`, `archive`, `unarchive`, `delete`, each taking the store/queue handle and returning `Result<()>`",
+        "Each call performs the optimistic cache mutation and the command enqueue inside a single transaction, using the enqueue API from the write-queue epic (EPIC-05); on transaction failure neither the row nor the command exists (unit-tested with a forced abort)",
+        "Exactly one command is enqueued per call (asserted by counting queue rows before/after)",
+        "`add_child` writes the new project with `parent_id` set to an existing project and a `child_order` placing it last among its siblings; adding under an unknown parent returns `StructureError::UnknownProject` and enqueues nothing",
+        "`archive` marks the cached project archived (not deleted) and leaves its items in the cache; `delete` removes the project row - the item-level consequence is delegated to the cascade module and not duplicated here",
+        "`rename` on an unknown id returns `StructureError::UnknownProject` and mutates nothing",
+        "Creating a project while offline (API unreachable) behaves identically: the cache row and queued command are both present",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Mirror the action-layer pattern established for task actions in EPIC-08 (validate -> optimistic apply + enqueue in one transaction -> return). Cache read/write helpers come from the SQLite store epic (EPIC-04); reuse the existing project queries instead of writing raw SQL where a helper already exists. Unit tests for this file are written by sdlc-unit-tester, not by the coder.",
+      "status": "todo"
+    },
+    {
+      "id": "T-804",
+      "title": "Section actions: add, rename, reorder, delete",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-802"
+      ],
+      "files": [
+        "src/structure/section.rs",
+        "src/structure/mod.rs"
+      ],
+      "acceptance": [
+        "`src/structure/section.rs` exposes `add`, `rename`, `reorder`, `delete`, each returning `Result<()>` and enqueuing exactly one command per call",
+        "`add` requires an existing `project_id`; unknown project returns `StructureError::UnknownProject` and enqueues nothing",
+        "`reorder(section_id, new_index)` recomputes `section_order` for all affected sections of that project in one transaction and emits a single reorder command carrying the full new ordering",
+        "Reorder is idempotent: reordering to the current index leaves orders unchanged and still emits at most one command (documented and tested whichever behaviour is chosen)",
+        "`delete` removes the section row optimistically; the fate of its items follows the rule documented by the cascade module, invoked rather than re-implemented",
+        "Optimistic apply and enqueue happen in a single transaction; a forced abort leaves neither",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Ordering fields (`section_order`, `child_order`) follow the semantics stored by the cache epic (EPIC-04); read the existing ordering helpers before adding new ones. Same transaction/enqueue pattern as the task-action layer in EPIC-08.",
+      "status": "todo"
+    },
+    {
+      "id": "T-805",
+      "title": "Personal label actions: add, rename, delete",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-802"
+      ],
+      "files": [
+        "src/structure/label.rs",
+        "src/structure/mod.rs"
+      ],
+      "acceptance": [
+        "`src/structure/label.rs` exposes `add`, `rename`, `delete`, each returning `Result<()>` and enqueuing exactly one command per call",
+        "`add` rejects a duplicate label name (case-insensitive) with `StructureError` and enqueues nothing",
+        "`rename` updates the cached label row and, per the documented local rule, the label references carried on cached items so task rows show the new name before the next sync; a unit test renames a label used by two items and asserts both items read back with the new name",
+        "`delete` removes the label row and drops that label from cached items' label lists, leaving other labels on those items intact",
+        "Unknown label id returns `StructureError::UnknownLabel` and mutates nothing",
+        "Optimistic apply and enqueue happen in a single transaction; a forced abort leaves neither",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Personal labels only - shared labels and label ordering are out of scope for this epic. Todoist items reference labels by name, so rename has a local fan-out onto items; keep that fan-out in one transaction with the enqueue. Reuse the label/item cache helpers from EPIC-04.",
+      "status": "todo"
+    },
+    {
+      "id": "T-806",
+      "title": "Local cascade rules for project/section delete and project archive",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-801",
+        "T-803",
+        "T-804"
+      ],
+      "files": [
+        "src/structure/cascade.rs",
+        "src/structure/mod.rs"
+      ],
+      "acceptance": [
+        "`src/structure/cascade.rs` implements exactly the rules written down in `docs/manual/epic-09-cascade-semantics.md`, one function per command (`on_project_delete`, `on_project_archive`, `on_section_delete`, `on_label_delete`), each operating on an open transaction supplied by the caller",
+        "`on_project_delete` also handles sub-projects recursively: deleting a parent removes its descendant projects and their items locally, asserted on a 3-level fixture tree",
+        "Each function returns a summary struct reporting counts (projects, sections, items affected) so the confirmation dialog can display them",
+        "A dry-run entry point (`preview_*` or a `DryRun` flag) computes the same counts without mutating anything, verified by asserting the row counts are unchanged after a preview call",
+        "Any case marked `## Unverified` in the cascade document uses the documented conservative fallback and carries a code comment pointing at that section",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "This is the risky part of the epic: the local optimistic effect must not diverge from what the next sync delta will bring back. Prefer deleting locally only what the doc proves the server deletes; everything else is left to the incoming delta from EPIC-06. The preview counts feed the delete-confirmation dialog in T-807.",
+      "status": "todo"
+    },
+    {
+      "id": "T-807",
+      "title": "Structure forms and delete-confirmation dialogs",
+      "type": "design",
+      "stack": "rust",
+      "deps": [
+        "T-802"
+      ],
+      "files": [
+        "src/ui/structure/mod.rs",
+        "src/ui/structure/form.rs",
+        "src/ui/structure/confirm.rs"
+      ],
+      "acceptance": [
+        "Add/rename forms exist for project (name, optional parent project, colour/favourite only if the cache model already carries them), section (name, project) and label (name), reusing the form widget and input-handling conventions introduced by the task-actions epic (EPIC-08) rather than new bespoke widgets",
+        "Validation errors from `StructureError` render inline in the form; the form stays open and no command is enqueued",
+        "Delete confirmation names the target (e.g. `Delete project \"Work\"?`) and, for projects and sections, shows the affected task count sourced from the cascade preview; `y`/Enter confirms, `n`/Esc cancels",
+        "Declining a confirmation enqueues nothing and mutates nothing (asserted in a unit test over the dialog's returned action, not by eyeballing)",
+        "Esc closes any structure form without side effects; the previously focused pane regains focus",
+        "Rendering is snapshot-tested against `ratatui::backend::TestBackend` at 80x24 for: project form empty, project form with validation error, delete-confirm with 12 tasks",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Pure UI layer: produces an intent value, never calls the store directly - dispatch is T-809. Follow the TUI shell conventions from EPIC-07 (theme, 80x24 minimum, overlay rendering) and the form/confirm components from EPIC-08; if those components are not merged yet, stop and ask instead of forking a parallel widget set.",
+      "status": "todo"
+    },
+    {
+      "id": "T-808",
+      "title": "Sidebar tree integration: nesting, archived projects, post-action refresh",
+      "type": "design",
+      "stack": "rust",
+      "deps": [
+        "T-803",
+        "T-807"
+      ],
+      "files": [
+        "src/ui/structure/sidebar.rs",
+        "src/ui/structure/mod.rs"
+      ],
+      "acceptance": [
+        "A project created with a parent appears nested one level under that parent in the sidebar immediately after the action, with sibling order matching `child_order`",
+        "Archived projects are hidden from the default sidebar tree and reappear when unarchived; deleted projects disappear along with their descendants",
+        "Sections appear as groups in the task list for the selected project and reflect add/rename/reorder/delete immediately (before any network round-trip)",
+        "Labels appear in the sidebar label list and on task rows; a rename is reflected in both within the same frame",
+        "Selection survives structural change sanely: deleting the selected project moves selection to its parent (or Inbox at top level) rather than panicking or leaving an out-of-range index - unit-tested",
+        "`TestBackend` snapshot tests cover: nested sub-project rendering, archived project hidden, sections grouped with one empty section",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Extends the sidebar/tree widget owned by the TUI shell epic (EPIC-07) with the structure-mutation refresh path; keep the changes inside `src/ui/structure/` and call into the shell's tree state rather than rewriting it. If a shell API is missing for selection repair, stop and ask.",
+      "status": "todo"
+    },
+    {
+      "id": "T-809",
+      "title": "Keymap dispatch and error surfacing for structure actions",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-803",
+        "T-804",
+        "T-805",
+        "T-807"
+      ],
+      "files": [
+        "src/ui/structure/dispatch.rs",
+        "src/ui/structure/mod.rs"
+      ],
+      "acceptance": [
+        "Key bindings route sidebar context to the right form: new project / new sub-project / new section / new label, rename, archive (projects only), delete; bindings are read from the config keymap with the documented defaults and are listed in the `?` help overlay",
+        "Archive and delete are bound to distinct keys and produce distinct commands; no single key can archive when delete was requested (unit-tested over the dispatch table)",
+        "A confirmed form/dialog action calls exactly one `src/structure/*` action function and the UI reflects the result in the same frame, with the API mock paused",
+        "A `StructureError` returned by an action is surfaced as a toast/status-bar message carrying the error text; the form state is preserved so the user can correct and retry",
+        "A command later rejected by the server surfaces its server-provided message through the same error surface, and the local state follows the keep/rollback rule defined by the write-queue epic (EPIC-05) - no second rollback is implemented here",
+        "Keys are inert when the focused pane has no structure context (e.g. detail pane), instead of acting on a stale selection",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Thin wiring layer: form intent (T-807) -> action module (T-803/804/805) -> UI refresh (T-808). Reuse the keymap loading and help-overlay registration from EPIC-07 and the error/toast surface from EPIC-08; do not introduce a second error channel.",
+      "status": "todo"
+    },
+    {
+      "id": "T-810",
+      "title": "Integration tests: one correct command per structure action against the API mock",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-803",
+        "T-804",
+        "T-805"
+      ],
+      "files": [
+        "tests/structure_commands.rs",
+        "tests/fixtures/structure_sync.json"
+      ],
+      "acceptance": [
+        "A table-driven test covers add / rename / archive / unarchive / delete project, add / rename / reorder / delete section, add / rename / delete label and asserts for each: exactly one command in the flushed `/sync` request, the expected `type`, the expected args, a well-formed fresh v4 `uuid`, and a `temp_id` present only on creates",
+        "Project archive and project delete are asserted to produce different `type` values in the same test run",
+        "Sub-project creation sends `parent_id` of an existing project; top-level creation omits `parent_id` entirely",
+        "Label rename sends the old and new name per the Sync API contract and, after applying the mocked response delta, the cached items that carried the label read back with the new name",
+        "Deleting a project that holds tasks leaves the cache matching the mocked server state for those tasks after one sync cycle (fixture covers the cascade documented in T-801)",
+        "`tests/fixtures/structure_sync.json` contains only fake ids and fake names - no real account data, tokens or personal content",
+        "Tests use the existing wiremock-based harness rather than hitting the network; `cargo test --all` passes"
+      ],
+      "context": "Follow the harness and fixture conventions already in `tests/sync_client.rs` and `tests/sync_fixture.rs` (wiremock server, fake token `tok_fake_abc123`). Assert on the serialised request body, not on internal structs, so a serde rename can't silently break the contract.",
+      "status": "todo"
+    },
+    {
+      "id": "T-811",
+      "title": "Integration tests: offline structure edits, temp_id nesting and duplicate-free flush",
+      "type": "test-int",
+      "stack": "rust",
+      "deps": [
+        "T-806",
+        "T-810"
+      ],
+      "files": [
+        "tests/structure_offline.rs"
+      ],
+      "acceptance": [
+        "With the mock API down, add/rename/archive/delete for project, section and label all succeed against the cache and leave queued commands; the app reports offline rather than erroring the action",
+        "After the mock returns, every queued structure command lands exactly once: the test asserts the multiset of `uuid`s seen server-side has no duplicates and matches the enqueued set",
+        "Creating a sub-project under a still-temp-id parent, then flushing, results in the child carrying the real parent id after `temp_id_mapping` resolution, with no temp id left in the DB",
+        "Creating a section and a task inside a just-created (temp-id) project resolves both to the real project id after one flush",
+        "A restart between enqueue and flush (reopen the store) preserves the queued structure commands with identical `uuid`s and still flushes exactly once",
+        "A server-rejected structure command (mocked error `sync_status`) keeps the queue unstalled: the remaining commands still flush and the failure is retrievable with its message",
+        "`cargo test --all` passes"
+      ],
+      "context": "Exercises the EPIC-05 queue and EPIC-06 cycle through the structure action layer; reuse their test helpers (store fixture, mock sync server, forced-offline transport) instead of new ones. This is the acceptance bullet 'all of the above work offline and flush without duplicates'.",
+      "status": "todo"
+    },
+    {
+      "id": "T-812",
+      "title": "E2E TUI tests for structure management flows",
+      "type": "test-e2e",
+      "stack": "rust",
+      "deps": [
+        "T-808",
+        "T-809"
+      ],
+      "files": [
+        "tests/structure_tui_e2e.rs"
+      ],
+      "acceptance": [
+        "Driving only key events against a `TestBackend` app: create a project, create a sub-project under it, rename it, archive it, unarchive it, delete it - each step asserted on the rendered sidebar buffer",
+        "Delete flow asserts the confirmation names the project and shows the task count, that Esc/`n` cancels with zero queued commands, and that `y` proceeds",
+        "Section flow: add two sections, reorder them, rename one, delete one - the grouped task list rendering matches expectations after each step with the API mock paused",
+        "Label flow: add, rename, delete - sidebar label list and the affected task rows re-render accordingly",
+        "A simulated server rejection renders the server message in the status bar/toast without leaving the UI in a stuck modal",
+        "The whole suite runs headless with no real network access and passes under `cargo test --all`",
+        "No real account data appears in any fixture used by the suite"
+      ],
+      "context": "Use the headless TUI harness from EPIC-07 (TestBackend + scripted key events + paused mock sync actor). Assert on rendered buffer content, not on internal state, so the test stays honest about what the owner actually sees.",
+      "status": "todo"
+    },
+    {
+      "id": "T-813",
+      "title": "Document structure management: keys, semantics and offline behaviour",
+      "type": "docs",
+      "stack": "rust",
+      "deps": [
+        "T-811",
+        "T-812"
+      ],
+      "files": [
+        "docs/manual/epic-09-structure.md",
+        "README.md"
+      ],
+      "acceptance": [
+        "Document lists every structure key binding with its default and the config key that overrides it, matching the `?` overlay exactly",
+        "Archive vs delete is explained for projects, including what happens to their tasks, referencing the verified rules in `docs/manual/epic-09-cascade-semantics.md`",
+        "Offline behaviour is described: edits apply locally, queue, flush once on reconnect; and what the owner sees when a structure command is rejected",
+        "Known limitations are listed explicitly: shared projects/collaborators unsupported, filters are view-only (EPIC-10), quick add not bound here",
+        "`README.md` gains a short 'Managing projects, sections and labels' pointer linking to the new manual page; no other README section is rewritten",
+        "No tokens, real ids or personal data in the examples"
+      ],
+      "context": "Follow the structure and tone of `docs/manual/epic-03-sync-api.md`. Docs land after the integration and e2e suites so the documented behaviour is the tested behaviour.",
+      "status": "todo"
+    }
+  ]
+}
