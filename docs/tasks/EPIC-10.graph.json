@@ -21,7 +21,7 @@
         "No production code is changed by this task"
       ],
       "context": "The epic explicitly flags that the Todoist filter query language is rich and needs a spike before implementation. Follow the style of the existing notes in `docs/manual/` (e.g. `epic-03-sync-api.md`). Saved filters arrive from the Sync API as the `filters` resource already modelled in `src/api/model/filter.rs` - read it for the available fields (`query`, `name`, `is_deleted`, ordering). Decide conservatively: when in doubt, mark a construct unsupported.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-902",
