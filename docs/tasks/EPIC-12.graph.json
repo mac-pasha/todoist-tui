@@ -25,7 +25,7 @@
         "`cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` pass"
       ],
       "context": "Later epics (06 sync cycle, 05 offline queue, 11 CLI) each ship their own ad-hoc test setup; this task consolidates one harness every EPIC-12 test reuses. Follow the existing wiremock usage in `tests/sync_client.rs` and the fixture conventions in `tests/fixtures/`. Integration tests are separate binaries, so shared code must live in `tests/support/mod.rs` and be included via `mod support;`. No production code changes.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-1102",
