@@ -76,3 +76,8 @@ expect_used = "deny"
 # HTTP mocking for T-106's wiremock-based status-mapping tests.
 wiremock = "0.6"
 
+# Shared integration-test harness (T-1101, EPIC-12): isolated temp HOME/XDG
+# dirs removed on drop. Process spawning uses std::process::Command, so
+# assert_cmd/predicates are deliberately not added.
+tempfile = "3"
+
