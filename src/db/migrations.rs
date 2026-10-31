@@ -194,4 +194,197 @@ mod tests {
             other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
         }
     }
+
+    #[test]
+    fn fresh_db_starts_at_zero_with_no_objects() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(user_version(&conn).unwrap(), 0);
+        assert_eq!(schema_objects(&conn).len(), 0);
+    }
+
+    #[test]
+    fn run_repeatedly_is_stable() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let first = run(&mut conn).unwrap();
+        let objects = schema_objects(&conn);
+        for _ in 0..5 {
+            assert_eq!(run(&mut conn).unwrap(), first);
+            assert_eq!(schema_objects(&conn), objects);
+        }
+        assert_eq!(user_version(&conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn run_exact_object_set() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).unwrap();
+        let objs = schema_objects(&conn);
+        let tables: Vec<&str> = objs
+            .iter()
+            .filter(|(t, _)| t == "table")
+            .map(|(_, n)| n.as_str())
+            .collect();
+        assert_eq!(
+            tables,
+            [
+                "day_orders",
+                "filters",
+                "items",
+                "labels",
+                "meta",
+                "notes",
+                "projects",
+                "sections",
+                "user"
+            ]
+        );
+        let indices = objs.iter().filter(|(t, _)| t == "index").count();
+        assert_eq!(indices, 5);
+    }
+
+    #[test]
+    fn indices_cover_expected_columns() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).unwrap();
+        let cols = |idx: &str| -> Vec<String> {
+            let mut stmt = conn.prepare(&format!("PRAGMA index_info({idx})")).unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(2))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert_eq!(
+            cols("idx_items_project_order"),
+            ["project_id", "child_order"]
+        );
+        assert_eq!(
+            cols("idx_items_section_order"),
+            ["section_id", "child_order"]
+        );
+        assert_eq!(cols("idx_items_parent_order"), ["parent_id", "child_order"]);
+        assert_eq!(cols("idx_items_due_date"), ["due_date"]);
+        assert_eq!(cols("idx_items_checked"), ["checked"]);
+    }
+
+    #[test]
+    fn resource_tables_have_raw_json_column() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).unwrap();
+        for t in [
+            "projects",
+            "items",
+            "sections",
+            "labels",
+            "notes",
+            "filters",
+            "user",
+            "day_orders",
+        ] {
+            let mut stmt = conn.prepare(&format!("PRAGMA table_info({t})")).unwrap();
+            let names: Vec<String> = stmt
+                .query_map([], |r| r.get(1))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap();
+            assert!(
+                names.contains(&"raw_json".to_string()),
+                "{t} lacks raw_json"
+            );
+        }
+    }
+
+    #[test]
+    fn run_preserves_existing_data() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        run(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('sync_token', 'abc')",
+            [],
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let v: String = conn
+            .query_row("SELECT value FROM meta WHERE key='sync_token'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(v, "abc");
+    }
+
+    #[test]
+    fn run_upgrades_from_version_zero_with_preexisting_tables() {
+        // Simulates a crashed/partial earlier attempt: IF NOT EXISTS must tolerate it.
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);")
+            .unwrap();
+        assert_eq!(run(&mut conn).unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn future_versions_report_exact_found_and_supported() {
+        for found in [SCHEMA_VERSION + 1, 1000, i32::MAX] {
+            let mut conn = Connection::open_in_memory().unwrap();
+            conn.pragma_update(None, "user_version", found).unwrap();
+            match run(&mut conn).unwrap_err() {
+                crate::error::AppError::Db(DbError::UnsupportedSchemaVersion {
+                    found: f,
+                    supported,
+                }) => {
+                    assert_eq!(f, found);
+                    assert_eq!(supported, SCHEMA_VERSION);
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+            // Refusal must not touch the database or version.
+            assert_eq!(schema_objects(&conn).len(), 0);
+            assert_eq!(user_version(&conn).unwrap(), found);
+        }
+    }
+
+    #[test]
+    fn current_version_with_no_tables_is_not_remigrated() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .unwrap();
+        assert_eq!(run(&mut conn).unwrap(), SCHEMA_VERSION);
+        assert_eq!(schema_objects(&conn).len(), 0);
+    }
+
+    #[test]
+    fn file_backed_db_persists_version_across_connections() {
+        let dir = std::env::temp_dir().join(format!("todoist-tui-t303-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("db.sqlite");
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut c = Connection::open(&path).unwrap();
+            assert_eq!(run(&mut c).unwrap(), SCHEMA_VERSION);
+        }
+        let mut c2 = Connection::open(&path).unwrap();
+        let objs = schema_objects(&c2);
+        assert_eq!(run(&mut c2).unwrap(), SCHEMA_VERSION);
+        assert_eq!(schema_objects(&c2), objs);
+        drop(c2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_migration_rolls_back_and_keeps_version() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        // A legacy `items` table lacking the indexed columns makes CREATE INDEX fail
+        // after earlier tables were created; everything must roll back.
+        conn.execute_batch("CREATE TABLE items (id TEXT PRIMARY KEY);")
+            .unwrap();
+        let err = run(&mut conn).unwrap_err();
+        assert!(matches!(
+            err,
+            crate::error::AppError::Db(DbError::Migrate { from: 0, to: 1, .. })
+        ));
+        assert_eq!(user_version(&conn).unwrap(), 0);
+        let tables: Vec<_> = schema_objects(&conn)
+            .into_iter()
+            .filter(|(t, _)| t == "table")
+            .collect();
+        assert_eq!(tables, [("table".to_string(), "items".to_string())]);
+    }
 }
