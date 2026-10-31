@@ -140,7 +140,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "This is the headless half of the `/` search UX so that it is testable without a terminal; EPIC-07's app loop (planned in parallel) will own the key dispatch that drives it. Keep view/selection identifiers generic (e.g. a `ViewId` enum defined here or an opaque string) so wiring to EPIC-07's actual view type is a small adapter, not a rewrite.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-907",
