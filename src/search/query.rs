@@ -344,8 +344,8 @@ mod tests {
     #[test]
     fn empty_items_slice_returns_no_hits() {
         let items: Vec<SearchItem> = Vec::new();
-        assert!(search(&items, "milk", &SearchScope::All).is_empty());
-        assert!(search(&items, "", &SearchScope::All).is_empty());
+        assert_eq!(search(&items, "milk", &SearchScope::All).len(), 0);
+        assert_eq!(search(&items, "", &SearchScope::All).len(), 0);
     }
 
     #[test]
@@ -362,7 +362,7 @@ mod tests {
         for h in &hits {
             assert_eq!(h.score, 0);
             assert_eq!(h.field, MatchedField::Content);
-            assert!(h.ranges.is_empty());
+            assert_eq!(h.ranges.len(), 0);
         }
     }
 
@@ -379,20 +379,23 @@ mod tests {
     #[test]
     fn needle_matching_neither_field_returns_nothing_for_every_item() {
         let items = vec![item("a", "alpha", "beta"), item("b", "gamma", "delta")];
-        assert!(search(&items, "zzz", &SearchScope::All).is_empty());
+        assert_eq!(search(&items, "zzz", &SearchScope::All).len(), 0);
     }
 
     #[test]
     fn needle_longer_than_both_fields_returns_nothing() {
         let items = vec![item("a", "ab", "cd")];
-        assert!(search(&items, "abcdef", &SearchScope::All).is_empty());
+        assert_eq!(search(&items, "abcdef", &SearchScope::All).len(), 0);
     }
 
     #[test]
     fn current_view_with_id_absent_from_items_is_ignored() {
         let items = vec![item("t1", "milk", "")];
         let ids: HashSet<String> = ["ghost".to_string()].into_iter().collect();
-        assert!(search(&items, "milk", &SearchScope::CurrentView { ids: &ids }).is_empty());
+        assert_eq!(
+            search(&items, "milk", &SearchScope::CurrentView { ids: &ids }).len(),
+            0
+        );
 
         let ids: HashSet<String> = ["ghost".to_string(), "t1".to_string()]
             .into_iter()
@@ -405,7 +408,10 @@ mod tests {
     fn current_view_id_match_is_exact_and_case_sensitive() {
         let items = vec![item("T1", "milk", ""), item("t1x", "milk", "")];
         let ids: HashSet<String> = ["t1".to_string()].into_iter().collect();
-        assert!(search(&items, "milk", &SearchScope::CurrentView { ids: &ids }).is_empty());
+        assert_eq!(
+            search(&items, "milk", &SearchScope::CurrentView { ids: &ids }).len(),
+            0
+        );
     }
 
     #[test]
@@ -511,7 +517,7 @@ mod tests {
         it.project_id = "uniqueproj".to_string();
         it.section_id = Some("uniquesect".to_string());
         let items = vec![it];
-        assert!(search(&items, "uniqueproj", &SearchScope::All).is_empty());
-        assert!(search(&items, "uniquesect", &SearchScope::All).is_empty());
+        assert_eq!(search(&items, "uniqueproj", &SearchScope::All).len(), 0);
+        assert_eq!(search(&items, "uniquesect", &SearchScope::All).len(), 0);
     }
 }
