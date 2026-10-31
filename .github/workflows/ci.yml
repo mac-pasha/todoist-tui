@@ -85,6 +85,56 @@ jobs:
           shared-key: todoist-tui
       - run: cargo build --release
 
+  # Proves the packaging promise end to end (T-1108, EPIC-12): a plain
+  # `cargo install --path .` (as an end user who ran `cargo package`/
+  # published the crate would do) produces a working, self-contained
+  # single binary. `--locked` guards against Cargo.lock drift; installing
+  # into a throwaway `$(mktemp -d) --root` keeps this hermetic and avoids
+  # polluting the runner's cargo home.
+  install:
+    name: install
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui
+      - name: cargo install --path . --locked
+        run: |
+          INSTALL_ROOT="$(mktemp -d)"
+          echo "INSTALL_ROOT=$INSTALL_ROOT" >> "$GITHUB_ENV"
+          cargo install --path . --locked --root "$INSTALL_ROOT"
+      - name: Verify --version
+        run: |
+          VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          OUTPUT="$("$INSTALL_ROOT/bin/todoist-tui" --version)"
+          echo "binary says: $OUTPUT"
+          echo "$OUTPUT" | grep -F "$VERSION"
+      # Machine-checks the rustls-only / bundled-sqlite promise (REQ-001):
+      # the installed binary must not dynamically link OpenSSL or the
+      # system SQLite library on either platform.
+      - name: Verify no libssl/libsqlite3 dynamic dependency (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ldd "$INSTALL_ROOT/bin/todoist-tui" | tee /tmp/ldd-output.txt
+          if grep -Eq 'libssl|libcrypto|libsqlite3' /tmp/ldd-output.txt; then
+            echo "::error::found forbidden dynamic dependency (libssl/libcrypto/libsqlite3)"
+            exit 1
+          fi
+      - name: Verify no libssl/libsqlite3 dynamic dependency (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          otool -L "$INSTALL_ROOT/bin/todoist-tui" | tee /tmp/otool-output.txt
+          if grep -Eq 'libssl|libcrypto|libsqlite3' /tmp/otool-output.txt; then
+            echo "::error::found forbidden dynamic dependency (libssl/libcrypto/libsqlite3)"
+            exit 1
+          fi
+
   # Dedicated Linux proof that the workspace builds with ONLY the system
   # packages installed below — i.e. no hidden host dependencies on a bare
   # GitHub ubuntu-latest runner.
