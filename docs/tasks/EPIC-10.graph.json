@@ -92,7 +92,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends on EPIC-04's cached-task read queries, which are planned in parallel and not merged yet - that is why the input is a borrowed `&[SearchItem]` slice the caller builds, not a DB handle. Keep it allocation-light: the perf test in T-908 runs this on 5k items per keystroke.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-905",
