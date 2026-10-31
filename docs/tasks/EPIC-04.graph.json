@@ -147,7 +147,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Models come from `src/api/model/item.rs` and `note.rs`; `day_orders` is a tolerant `serde_json::Map` on `SyncResponse` (see `src/api/sync.rs`) so keep the storage equally tolerant. Column names must match the schema agreed in T-303 — coordinate via `src/db/schema.sql`, do not add columns here.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-307",

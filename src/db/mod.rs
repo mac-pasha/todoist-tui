@@ -17,3 +17,4 @@
 pub mod meta;
 pub mod migrations;
 pub mod open;
+pub mod resources;
