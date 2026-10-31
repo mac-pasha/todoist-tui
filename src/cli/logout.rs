@@ -16,7 +16,11 @@
 //! exits `0`. When either step fails, the command reports which one(s)
 //! failed on stderr, still runs the remaining step, and returns an error
 //! (propagated to a non-zero exit by `main`'s existing error-to-exit-code
-//! mapping, the same path T-107's `auth` command uses).
+//! mapping, the same path T-107's `auth` command uses). As of T-309,
+//! [`CacheWipe::wipe`] is backed by real file I/O
+//! ([`crate::db::wipe::SqliteCacheWipe`]) and so can genuinely fail (e.g.
+//! permissions) -- it is no longer the infallible placeholder
+//! [`crate::auth::cache_wipe::NoopCacheWipe`] was.
 //!
 //! # Logging contract (T-108 acceptance 6)
 //!
