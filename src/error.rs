@@ -55,6 +55,10 @@ pub enum AppError {
     /// The local SQLite store (open, migrate, read/write, EPIC-04) failed.
     #[error("db: {0}")]
     Db(#[from] DbError),
+
+    /// The offline command queue (persist/replay, EPIC-05) failed.
+    #[error("queue: {0}")]
+    Queue(#[from] QueueError),
 }
 
 /// Errors raised while loading the TOML config file.
@@ -328,6 +332,76 @@ pub enum DbError {
     },
 }
 
+/// Errors raised by the offline command queue (EPIC-05).
+///
+/// No variant here may carry raw secret material: command UUIDs, temp IDs,
+/// queue depths and opaque `rusqlite`/`serde_json` source errors only. API
+/// error messages echoed back in `CommandFailed` are Todoist's own
+/// human-readable text, never a token or credential.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum QueueError {
+    /// The queue's SQLite-backed persistence failed (open, read, write).
+    #[error("queue storage failed: {source}")]
+    Storage {
+        /// Underlying `rusqlite` error.
+        #[source]
+        source: rusqlite::Error,
+    },
+
+    /// A queued command (or its result) could not be (de)serialised.
+    #[error("failed to (de)serialize queued command: {source}")]
+    Serialize {
+        /// Underlying (de)serialisation error.
+        #[source]
+        source: serde_json::Error,
+    },
+
+    /// A queued command's `kind` did not match any known command type.
+    #[error("unknown queued command type: {kind}")]
+    UnknownCommandType {
+        /// The unrecognised command type tag.
+        kind: String,
+    },
+
+    /// A command referenced a temp ID that was never resolved to a real
+    /// Todoist ID by a prior `item_add`/`project_add`-style command.
+    #[error("unresolved temp id: {temp_id}")]
+    UnresolvedTempId {
+        /// The temp ID that could not be resolved.
+        temp_id: String,
+    },
+
+    /// The Todoist Sync API rejected a queued command (non-`ok` status).
+    #[error("command {uuid} failed: {message}")]
+    CommandFailed {
+        /// UUID of the command the API rejected.
+        uuid: String,
+        /// Todoist error code, if the API supplied one.
+        code: Option<i64>,
+        /// Todoist's human-readable error message (not a secret).
+        message: String,
+    },
+
+    /// The queue has reached its configured capacity and cannot accept more
+    /// pending commands.
+    #[error("command queue is full ({pending} pending)")]
+    QueueFull {
+        /// Number of commands currently pending in the queue.
+        pending: u64,
+    },
+}
+
+impl QueueError {
+    /// Whether a fresh attempt of the same operation might succeed: true
+    /// only for `Storage` (a transient SQLite failure); false for every
+    /// other variant, which represents a logic/data error that retrying
+    /// unchanged will not fix.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, QueueError::Storage { .. })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,5 +517,151 @@ mod tests {
                 _ => assert!(err.source().is_some(), "missing source for {err:?}"),
             }
         }
+    }
+
+    /// Fixture marker standing in for sensitive command-arg payload text
+    /// (e.g. a task/note body); never a real credential.
+    const FIXTURE_ARG_MARKER: &str = "secret_note_body";
+
+    fn sample_queue_errors() -> Vec<QueueError> {
+        vec![
+            QueueError::Storage {
+                source: rusqlite::Error::InvalidQuery,
+            },
+            QueueError::Serialize {
+                source: serde_json::from_str::<serde_json::Value>("{").unwrap_err(),
+            },
+            QueueError::UnknownCommandType {
+                kind: "item_frobnicate".to_string(),
+            },
+            QueueError::UnresolvedTempId {
+                temp_id: "tmp-1".to_string(),
+            },
+            QueueError::CommandFailed {
+                uuid: "cmd-1".to_string(),
+                code: Some(42),
+                message: "invalid due date".to_string(),
+            },
+            QueueError::QueueFull { pending: 500 },
+        ]
+    }
+
+    #[test]
+    fn queue_error_variants_never_leak_fixture_secrets() {
+        for err in sample_queue_errors() {
+            let display = format!("{err}");
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(FIXTURE_TOKEN),
+                "Display leaked fixture token: {display}"
+            );
+            assert!(
+                !debug.contains(FIXTURE_TOKEN),
+                "Debug leaked fixture token: {debug}"
+            );
+            assert!(
+                !display.contains(FIXTURE_ARG_MARKER),
+                "Display leaked fixture arg payload marker: {display}"
+            );
+            assert!(
+                !debug.contains(FIXTURE_ARG_MARKER),
+                "Debug leaked fixture arg payload marker: {debug}"
+            );
+        }
+    }
+
+    #[test]
+    fn app_error_queue_has_queue_prefix_and_from_conversion() {
+        let app: AppError = QueueError::QueueFull { pending: 7 }.into();
+        assert!(matches!(app, AppError::Queue(_)));
+        let shown = app.to_string();
+        assert!(shown.starts_with("queue: "), "got {shown}");
+        assert!(shown.contains('7'), "got {shown}");
+    }
+
+    #[test]
+    fn queue_error_is_retryable_only_for_storage() {
+        for err in sample_queue_errors() {
+            let expected = matches!(err, QueueError::Storage { .. });
+            assert_eq!(
+                err.is_retryable(),
+                expected,
+                "unexpected is_retryable() for {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn queue_error_display_per_variant() {
+        let shown: Vec<String> = sample_queue_errors()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            shown[0].starts_with("queue storage failed: "),
+            "{}",
+            shown[0]
+        );
+        assert!(
+            shown[1].starts_with("failed to (de)serialize"),
+            "{}",
+            shown[1]
+        );
+        assert_eq!(shown[2], "unknown queued command type: item_frobnicate");
+        assert_eq!(shown[3], "unresolved temp id: tmp-1");
+        assert_eq!(shown[4], "command cmd-1 failed: invalid due date");
+        assert_eq!(shown[5], "command queue is full (500 pending)");
+    }
+
+    #[test]
+    fn queue_error_command_failed_without_code() {
+        let err = QueueError::CommandFailed {
+            uuid: "cmd-2".to_string(),
+            code: None,
+            message: "boom".to_string(),
+        };
+        assert_eq!(err.to_string(), "command cmd-2 failed: boom");
+        assert!(format!("{err:?}").contains("code: None"));
+        assert!(!err.is_retryable());
+        for text in [format!("{err}"), format!("{err:?}")] {
+            assert!(!text.contains(FIXTURE_TOKEN));
+            assert!(!text.contains(FIXTURE_ARG_MARKER));
+        }
+    }
+
+    #[test]
+    fn queue_error_source_chain() {
+        use std::error::Error as _;
+        for err in sample_queue_errors() {
+            let has_source = matches!(
+                err,
+                QueueError::Storage { .. } | QueueError::Serialize { .. }
+            );
+            assert_eq!(err.source().is_some(), has_source, "{err:?}");
+        }
+        let app: AppError = QueueError::UnresolvedTempId {
+            temp_id: "tmp-9".to_string(),
+        }
+        .into();
+        assert!(app.source().is_some());
+        assert_eq!(app.to_string(), "queue: unresolved temp id: tmp-9");
+    }
+
+    #[test]
+    fn app_error_queue_prefix_for_every_variant() {
+        for err in sample_queue_errors() {
+            let inner = err.to_string();
+            let app = AppError::from(err);
+            assert_eq!(app.to_string(), format!("queue: {inner}"));
+            assert!(!format!("{app:?}").contains(FIXTURE_TOKEN));
+            assert!(!format!("{app:?}").contains(FIXTURE_ARG_MARKER));
+        }
+    }
+
+    #[test]
+    fn queue_full_handles_u64_max() {
+        let err = QueueError::QueueFull { pending: u64::MAX };
+        assert!(err.to_string().contains("18446744073709551615"));
+        assert!(!err.is_retryable());
     }
 }
