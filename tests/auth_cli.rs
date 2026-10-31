@@ -264,10 +264,12 @@ fn guarded_commands_exit_nonzero_with_not_authenticated_when_no_token_is_stored(
         let output = sandbox.run_plain(args);
         let err = stderr(&output);
 
+        // T-1001: the auth guard's exit code is now its own dedicated
+        // code (3), distinct from the generic failure code (1).
         assert_eq!(
             output.status.code(),
-            Some(1),
-            "args {args:?}: expected exit 1, stderr: {err}"
+            Some(3),
+            "args {args:?}: expected exit 3, stderr: {err}"
         );
         assert!(
             err.contains("not authenticated"),

@@ -67,14 +67,41 @@ impl<O: Write, E: Write> Output<O, E> {
         writeln!(self.stderr, "{line}")
     }
 
-    /// Flushes both sinks.
+    /// Writes `line` to stdout, wrapped in an ANSI bold escape sequence
+    /// when [`Output::is_color_enabled`] is true, or as plain text
+    /// otherwise.
+    ///
+    /// Exists primarily so the colour-suppression decision made by
+    /// [`color_enabled`] is actually exercised end-to-end by a test: unlike
+    /// [`Output::write_line`], which never emits escapes on its own, this
+    /// method is the one place `Output` itself decides whether to colourise.
     ///
     /// # Errors
     ///
     /// Returns the underlying sink's I/O error.
+    pub fn write_colored_line(&mut self, line: &str) -> io::Result<()> {
+        if self.color_enabled {
+            writeln!(self.stdout, "\u{1b}[1m{line}\u{1b}[0m")
+        } else {
+            writeln!(self.stdout, "{line}")
+        }
+    }
+
+    /// Flushes both sinks.
+    ///
+    /// Both flushes are always attempted, even if the first one fails:
+    /// callers on the error-reporting path (e.g. `main`'s `fail` helper)
+    /// flush stdout and stderr together, and a failing stdout flush must
+    /// never suppress an error message that still needs to reach stderr.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first encountered I/O error, if any, after both sinks
+    /// have been flushed.
     pub fn flush(&mut self) -> io::Result<()> {
-        self.stdout.flush()?;
-        self.stderr.flush()
+        let stdout_result = self.stdout.flush();
+        let stderr_result = self.stderr.flush();
+        stdout_result.and(stderr_result)
     }
 }
 
@@ -82,6 +109,13 @@ impl Output<io::Stdout, io::Stderr> {
     /// Builds the real process-facing `Output`: real stdout/stderr, with
     /// [`color_enabled`] deciding colour from the real stdout TTY check,
     /// `NO_COLOR` and `no_color_flag` (the CLI's `--no-color`).
+    ///
+    /// Call this once at process startup (`main` is the only caller): it
+    /// reads the `NO_COLOR` environment variable via [`color_enabled`],
+    /// which is only safe to treat as a stable decision for the lifetime of
+    /// the process if nothing else in the process mutates the environment
+    /// afterwards. Do not call this (or [`color_enabled`]) per-line or
+    /// per-command; decide once and reuse the resulting `Output`.
     #[must_use]
     pub fn for_process(no_color_flag: bool) -> Self {
         let enabled = color_enabled(io::stdout().is_terminal(), no_color_flag);
@@ -94,6 +128,12 @@ impl Output<io::Stdout, io::Stderr> {
 /// False whenever `stdout_is_terminal` is false, the `NO_COLOR` environment
 /// variable is set (to any value, per <https://no-color.org>), or
 /// `no_color_flag` (the CLI's `--no-color`) is true; true otherwise.
+///
+/// Reads the `NO_COLOR` environment variable on every call, so it must only
+/// be called once per process (at startup, via [`Output::for_process`]) and
+/// its result cached — not re-invoked per-line or per-command — to avoid
+/// any risk of racing with concurrent env mutation elsewhere in the process
+/// (tests serialise access to `NO_COLOR` for exactly this reason).
 #[must_use]
 pub fn color_enabled(stdout_is_terminal: bool, no_color_flag: bool) -> bool {
     if no_color_flag {
@@ -181,6 +221,34 @@ mod tests {
             !stderr.contains(&0x1b),
             "stderr must not contain the ESC byte when colour is disabled"
         );
+    }
+
+    /// Proof that the colour-OFF decision actually suppresses an escape
+    /// sequence that the colour-ON branch of the *same* code path would
+    /// emit: `write_colored_line` is the one `Output` method that decides
+    /// whether to colourise, so this exercises the decision itself rather
+    /// than asserting on a path (`write_line`) that can never emit escapes
+    /// either way.
+    #[test]
+    fn write_colored_line_emits_escape_only_when_color_is_enabled() {
+        let mut stdout_on = Vec::new();
+        let mut stderr_on = Vec::new();
+        let mut on = Output::new(&mut stdout_on, &mut stderr_on, true);
+        on.write_colored_line("hello world").unwrap();
+        assert!(
+            stdout_on.contains(&0x1b),
+            "colour-enabled output must contain the ESC byte"
+        );
+
+        let mut stdout_off = Vec::new();
+        let mut stderr_off = Vec::new();
+        let mut off = Output::new(&mut stdout_off, &mut stderr_off, false);
+        off.write_colored_line("hello world").unwrap();
+        assert!(
+            !stdout_off.contains(&0x1b),
+            "colour-disabled output must not contain the ESC byte"
+        );
+        assert_eq!(stdout_off, b"hello world\n");
     }
 
     /// The rendered bytes for a sample line equal the expected plain-text
