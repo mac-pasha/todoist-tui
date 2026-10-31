@@ -168,12 +168,35 @@
       "status": "todo"
     },
     {
+      "id": "T-912",
+      "title": "Fix match_score allocation hot path so search meets the 16ms keystroke budget",
+      "type": "code",
+      "stack": "rust",
+      "deps": [
+        "T-904"
+      ],
+      "files": [
+        "src/search/fuzzy.rs",
+        "src/search/query.rs"
+      ],
+      "acceptance": [
+        "`match_score` no longer allocates fresh `Vec<Vec<_>>` DP matrices (m_score/came_from_contiguous/d_score/d_arg) on every call; reuse scratch buffers across calls within a single `search()` invocation (e.g. a reusable scratch struct passed down, or flattened single-allocation buffers sized once per `search()` call and cleared/reused per item)",
+        "`search()` over a synthetic, deterministic 5000-item fixture (short realistic content/description, 6-char query typed incrementally) has p95 per-keystroke latency under 16ms in `--release` mode on commodity CI hardware (document the measurement method and machine class assumption in a code comment)",
+        "No change to `match_score`'s public signature, scoring semantics, tie-break order or any existing T-902/T-904 unit test's expected output - this is a pure performance refactor, not a behavior change; every existing src/search test still passes unmodified",
+        "No new crate dependency; `Cargo.toml` and `Cargo.lock` are unchanged",
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+      ],
+      "context": "Discovered by the T-908 perf-test author: match_score allocates 4 fresh Vec<Vec<_>> DP matrices per call; search() calls it up to 2x per item x 5000 items per keystroke, measured at 25-90ms p95 in release (budget is 16ms). Root cause is allocation churn, not algorithmic complexity - prefer reusing flat Vec<T> scratch buffers (indexed manually) sized once per search() call over the 2D Vec<Vec<_>> approach, or threading a reusable scratch struct through match_score. Keep the diff minimal and behavior-preserving; T-908 depends on this landing first and will re-measure against it.",
+      "status": "todo"
+    },
+    {
       "id": "T-908",
       "title": "Search keystroke latency test at 5k cached items",
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-904"
+        "T-904",
+        "T-912"
       ],
       "files": [
         "tests/search_perf.rs"
