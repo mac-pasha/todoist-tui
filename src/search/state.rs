@@ -240,3 +240,410 @@ impl<'a> SearchSession<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(id: &str, content: &str) -> SearchItem {
+        SearchItem {
+            id: id.to_string(),
+            content: content.to_string(),
+            description: String::new(),
+            project_id: "p1".to_string(),
+            section_id: None,
+        }
+    }
+
+    fn pies() -> Vec<SearchItem> {
+        vec![
+            item("t1", "apple pie"),
+            item("t2", "apple tart"),
+            item("t3", "apple cake"),
+            item("t4", "banana split"),
+        ]
+    }
+
+    fn ids(v: &[&str]) -> HashSet<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn open<'a>(items: &'a [SearchItem], view: &[&str]) -> SearchSession<'a> {
+        SearchSession::open(items, ids(view), ViewId::new("inbox"), Some("t1".into()))
+    }
+
+    fn type_str(s: &mut SearchSession<'_>, text: &str) {
+        for c in text.chars() {
+            s.push_char(c);
+        }
+    }
+
+    fn result_ids<'a>(s: &SearchSession<'a>) -> Vec<&'a str> {
+        s.results().iter().map(|h| h.id).collect()
+    }
+
+    #[test]
+    fn open_starts_with_empty_query_and_current_view_scope() {
+        let items = pies();
+        let s = open(&items, &["t1"]);
+        assert_eq!(s.query(), "");
+        assert_eq!(s.scope(), SessionScope::CurrentView);
+        assert_eq!(s.highlighted_index().is_some(), !s.results().is_empty());
+    }
+
+    #[test]
+    fn cancel_returns_exact_snapshot() {
+        let items = pies();
+        let s = open(&items, &["t1"]);
+        assert_eq!(
+            s.cancel(),
+            ViewSnapshot {
+                previous_view: ViewId::new("inbox"),
+                previous_selection: Some("t1".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn cancel_snapshot_with_no_selection() {
+        let items = pies();
+        let s = SearchSession::open(&items, ids(&[]), ViewId::from("today"), None);
+        let snap = s.cancel();
+        assert_eq!(snap.previous_view.as_str(), "today");
+        assert_eq!(snap.previous_selection, None);
+    }
+
+    #[test]
+    fn cancel_after_mutations_returns_original_snapshot() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2"]);
+        type_str(&mut s, "app");
+        s.set_scope(SessionScope::All);
+        s.select_next();
+        s.pop_char();
+        let snap = s.cancel();
+        assert_eq!(snap.previous_view, ViewId::new("inbox"));
+        assert_eq!(snap.previous_selection.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn clear_empties_query_and_keeps_snapshot() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3"]);
+        type_str(&mut s, "apple");
+        assert_eq!(s.query(), "apple");
+        s.clear();
+        assert_eq!(s.query(), "");
+        // Session still usable after clear.
+        s.push_char('a');
+        assert_eq!(s.query(), "a");
+        let snap = s.cancel();
+        assert_eq!(snap.previous_view, ViewId::new("inbox"));
+        assert_eq!(snap.previous_selection.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn clear_matches_fresh_session_results() {
+        let items = pies();
+        let fresh = open(&items, &["t1", "t2", "t3"]);
+        let mut s = open(&items, &["t1", "t2", "t3"]);
+        type_str(&mut s, "cake");
+        s.clear();
+        assert_eq!(result_ids(&s), result_ids(&fresh));
+    }
+
+    #[test]
+    fn clear_preserves_scope() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        s.set_scope(SessionScope::All);
+        type_str(&mut s, "x");
+        s.clear();
+        assert_eq!(s.scope(), SessionScope::All);
+    }
+
+    #[test]
+    fn cancel_from_empty_query_still_closes() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        type_str(&mut s, "a");
+        s.clear();
+        assert_eq!(s.query(), "");
+        let snap = s.cancel();
+        assert_eq!(snap.previous_view, ViewId::new("inbox"));
+        assert_eq!(snap.previous_selection.as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn cancel_on_freshly_opened_session_closes() {
+        let items = pies();
+        let s = open(&items, &["t1"]);
+        assert_eq!(s.query(), "");
+        let _ = s.cancel();
+    }
+
+    #[test]
+    fn accept_returns_highlighted_hit() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3"]);
+        type_str(&mut s, "apple");
+        assert_eq!(s.results().len(), 3);
+        let expected = s.results()[0].id;
+        assert_eq!(s.highlighted_index(), Some(0));
+        assert_eq!(s.accept().map(|h| h.id), Some(expected));
+    }
+
+    #[test]
+    fn accept_returns_hit_after_moving_highlight() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3"]);
+        type_str(&mut s, "apple");
+        s.select_next();
+        s.select_next();
+        let expected = s.results()[2].id;
+        assert_eq!(s.highlighted_index(), Some(2));
+        assert_eq!(s.accept().map(|h| h.id), Some(expected));
+    }
+
+    #[test]
+    fn accept_returns_none_when_no_results() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3"]);
+        type_str(&mut s, "zzzz");
+        assert!(s.results().is_empty());
+        assert_eq!(s.highlighted_index(), None);
+        assert!(s.accept().is_none());
+    }
+
+    #[test]
+    fn accept_with_no_items_returns_none() {
+        let items: Vec<SearchItem> = Vec::new();
+        let s = open(&items, &[]);
+        assert!(s.accept().is_none());
+    }
+
+    #[test]
+    fn results_recomputed_on_each_push_and_pop() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3", "t4"]);
+        s.push_char('b');
+        assert_eq!(result_ids(&s), vec!["t4"]);
+        s.push_char('z');
+        assert!(s.results().is_empty());
+        s.pop_char();
+        assert_eq!(result_ids(&s), vec!["t4"]);
+        s.pop_char();
+        assert_eq!(s.query(), "");
+    }
+
+    #[test]
+    fn push_pop_sequence_tracks_query_text() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        type_str(&mut s, "abc");
+        assert_eq!(s.query(), "abc");
+        s.pop_char();
+        assert_eq!(s.query(), "ab");
+        s.push_char('x');
+        assert_eq!(s.query(), "abx");
+        s.pop_char();
+        s.pop_char();
+        s.pop_char();
+        assert_eq!(s.query(), "");
+    }
+
+    #[test]
+    fn pop_char_on_empty_query_is_noop() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        s.pop_char();
+        s.pop_char();
+        assert_eq!(s.query(), "");
+        assert_eq!(s.scope(), SessionScope::CurrentView);
+        // Still functional.
+        s.push_char('a');
+        assert_eq!(s.query(), "a");
+    }
+
+    #[test]
+    fn pop_char_removes_whole_multibyte_char() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        s.push_char('a');
+        s.push_char('é');
+        s.push_char('日');
+        s.pop_char();
+        assert_eq!(s.query(), "aé");
+        s.pop_char();
+        assert_eq!(s.query(), "a");
+    }
+
+    #[test]
+    fn highlight_clamped_when_result_set_shrinks() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3", "t4"]);
+        type_str(&mut s, "apple");
+        assert_eq!(s.results().len(), 3);
+        s.select_next();
+        s.select_next();
+        assert_eq!(s.highlighted_index(), Some(2));
+
+        // Narrow to exactly one match: "apple pie".
+        type_str(&mut s, " pie");
+        assert_eq!(result_ids(&s), vec!["t1"]);
+        assert_eq!(s.highlighted_index(), Some(0));
+        assert_eq!(s.accept().map(|h| h.id), Some("t1"));
+    }
+
+    #[test]
+    fn highlight_clamped_to_last_on_partial_shrink() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3", "t4"]);
+        type_str(&mut s, "apple");
+        s.select_next();
+        s.select_next();
+        assert_eq!(s.highlighted_index(), Some(2));
+        // "apple t" matches only "apple tart" (cake/pie lack a 't' after space).
+        type_str(&mut s, " ta");
+        let n = s.results().len();
+        assert!(n >= 1 && n < 3, "expected shrink, got {n}");
+        assert_eq!(s.highlighted_index(), Some(n - 1));
+    }
+
+    #[test]
+    fn highlight_in_range_after_every_mutation() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3", "t4"]);
+        type_str(&mut s, "apple");
+        s.select_next();
+        s.select_next();
+        for c in "xyz".chars() {
+            s.push_char(c);
+            match s.highlighted_index() {
+                Some(i) => assert!(i < s.results().len()),
+                None => assert!(s.results().is_empty()),
+            }
+        }
+        while !s.query().is_empty() {
+            s.pop_char();
+            match s.highlighted_index() {
+                Some(i) => assert!(i < s.results().len()),
+                None => assert!(s.results().is_empty()),
+            }
+        }
+    }
+
+    #[test]
+    fn highlight_none_then_valid_after_results_return() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3"]);
+        type_str(&mut s, "zz");
+        assert_eq!(s.highlighted_index(), None);
+        s.pop_char();
+        s.pop_char();
+        s.push_char('a');
+        assert!(s.highlighted_index().is_some());
+    }
+
+    #[test]
+    fn select_next_and_previous_saturate() {
+        let items = pies();
+        let mut s = open(&items, &["t1", "t2", "t3"]);
+        type_str(&mut s, "apple");
+        s.select_previous();
+        assert_eq!(s.highlighted_index(), Some(0));
+        for _ in 0..10 {
+            s.select_next();
+        }
+        assert_eq!(s.highlighted_index(), Some(2));
+        s.select_previous();
+        assert_eq!(s.highlighted_index(), Some(1));
+    }
+
+    #[test]
+    fn select_on_empty_results_is_noop() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        type_str(&mut s, "zzzz");
+        s.select_next();
+        s.select_previous();
+        assert_eq!(s.highlighted_index(), None);
+    }
+
+    #[test]
+    fn scope_toggle_preserves_query_and_changes_results() {
+        let items = pies();
+        // Current view contains only t1; t2/t3 are outside it.
+        let mut s = open(&items, &["t1"]);
+        type_str(&mut s, "apple");
+        assert_eq!(result_ids(&s), vec!["t1"]);
+
+        s.set_scope(SessionScope::All);
+        assert_eq!(s.scope(), SessionScope::All);
+        assert_eq!(s.query(), "apple");
+        let mut all = result_ids(&s);
+        all.sort();
+        assert_eq!(all, vec!["t1", "t2", "t3"]);
+
+        s.set_scope(SessionScope::CurrentView);
+        assert_eq!(s.scope(), SessionScope::CurrentView);
+        assert_eq!(s.query(), "apple");
+        assert_eq!(result_ids(&s), vec!["t1"]);
+    }
+
+    #[test]
+    fn scope_toggle_clamps_highlight() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        s.set_scope(SessionScope::All);
+        type_str(&mut s, "apple");
+        s.select_next();
+        s.select_next();
+        assert_eq!(s.highlighted_index(), Some(2));
+        s.set_scope(SessionScope::CurrentView);
+        assert_eq!(s.highlighted_index(), Some(0));
+    }
+
+    #[test]
+    fn scope_set_to_same_value_is_idempotent() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        type_str(&mut s, "apple");
+        let before = result_ids(&s);
+        s.set_scope(SessionScope::CurrentView);
+        assert_eq!(result_ids(&s), before);
+        assert_eq!(s.query(), "apple");
+    }
+
+    #[test]
+    fn scope_toggle_with_empty_query_keeps_query_empty() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        s.set_scope(SessionScope::All);
+        assert_eq!(s.query(), "");
+    }
+
+    #[test]
+    fn typing_after_scope_toggle_uses_new_scope() {
+        let items = pies();
+        let mut s = open(&items, &["t1"]);
+        s.set_scope(SessionScope::All);
+        type_str(&mut s, "apple t");
+        assert!(result_ids(&s).contains(&"t2"));
+    }
+
+    #[test]
+    fn current_view_with_empty_id_set_yields_no_results() {
+        let items = pies();
+        let mut s = open(&items, &[]);
+        type_str(&mut s, "apple");
+        assert!(s.results().is_empty());
+        assert!(s.accept().is_none());
+    }
+
+    #[test]
+    fn view_id_conversions() {
+        assert_eq!(ViewId::from("a"), ViewId::new("a"));
+        assert_eq!(ViewId::from(String::from("a")).as_str(), "a");
+    }
+}
