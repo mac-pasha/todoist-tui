@@ -4,6 +4,27 @@ version = "0.1.0"
 edition = "2021"
 description = "Terminal UI client for Todoist"
 license = "MIT"
+readme = "README.md"
+# Placeholder slug — matches the <owner>/todoist-tui convention already used
+# in README.md's install instructions (T-1108). Update once the repo has a
+# real home.
+repository = "https://github.com/example-org/todoist-tui"
+homepage = "https://github.com/example-org/todoist-tui"
+documentation = "https://github.com/example-org/todoist-tui#readme"
+keywords = ["todoist", "tui", "terminal", "productivity", "cli"]
+categories = ["command-line-utilities"]
+# Matches the pinned stable toolchain in rust-toolchain.toml (informational
+# only — rust-toolchain.toml remains the enforced pin, this field is not
+# edited here).
+rust-version = "1.99.1"
+# Keep `cargo package` lean: docs/, .sdlc/ tooling and test fixtures are not
+# part of the shipped crate.
+exclude = [
+    "docs/",
+    ".sdlc/",
+    "tests/",
+    ".github/",
+]
 
 # Single binary target (binary crate, no workspace).
 [[bin]]
