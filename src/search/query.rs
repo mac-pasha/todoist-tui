@@ -61,6 +61,11 @@ pub struct SearchHit<'a> {
     pub score: i64,
     pub field: MatchedField,
     pub ranges: Vec<Range<usize>>,
+    /// The matched field's full text (the `haystack` passed to
+    /// `match_score`), kept so tie-breaking can follow `match_score`'s
+    /// documented rule of `haystack.len()` then `haystack` byte order,
+    /// rather than a proxy derived from `ranges`.
+    haystack: &'a str,
 }
 
 /// Restricts which [`SearchItem`]s [`search`] considers.
@@ -99,12 +104,8 @@ pub fn search<'a>(
     hits.sort_by(|a, b| {
         b.score
             .cmp(&a.score)
-            .then_with(|| matched_text(a).len().cmp(&matched_text(b).len()))
-            .then_with(|| {
-                let a_spans = matched_text(a).iter().map(|r| (r.start, r.end));
-                let b_spans = matched_text(b).iter().map(|r| (r.start, r.end));
-                a_spans.cmp(b_spans)
-            })
+            .then_with(|| a.haystack.len().cmp(&b.haystack.len()))
+            .then_with(|| a.haystack.cmp(b.haystack))
             .then_with(|| a.id.cmp(b.id))
     });
 
@@ -128,35 +129,45 @@ fn best_hit<'a>(item: &'a SearchItem, needle: &str) -> Option<SearchHit<'a>> {
     match (content_match, description_match) {
         (Some(content), Some(description)) => {
             if description.score > content.score {
-                Some(to_hit(&item.id, MatchedField::Description, description))
+                Some(to_hit(
+                    &item.id,
+                    MatchedField::Description,
+                    description,
+                    &item.description,
+                ))
             } else {
-                Some(to_hit(&item.id, MatchedField::Content, content))
+                Some(to_hit(
+                    &item.id,
+                    MatchedField::Content,
+                    content,
+                    &item.content,
+                ))
             }
         }
-        (Some(content), None) => Some(to_hit(&item.id, MatchedField::Content, content)),
-        (None, Some(description)) => Some(to_hit(&item.id, MatchedField::Description, description)),
+        (Some(content), None) => Some(to_hit(
+            &item.id,
+            MatchedField::Content,
+            content,
+            &item.content,
+        )),
+        (None, Some(description)) => Some(to_hit(
+            &item.id,
+            MatchedField::Description,
+            description,
+            &item.description,
+        )),
         (None, None) => None,
     }
 }
 
-fn to_hit(id: &str, field: MatchedField, m: MatchScore) -> SearchHit<'_> {
+fn to_hit<'a>(id: &'a str, field: MatchedField, m: MatchScore, haystack: &'a str) -> SearchHit<'a> {
     SearchHit {
         id,
         score: m.score,
         field,
         ranges: m.ranges,
+        haystack,
     }
-}
-
-/// The text a hit's tie-break compares: a proxy for the haystack that was
-/// scored, derived from the matched ranges' span. Since `SearchHit` does
-/// not carry the original field text, the ranges themselves (which are
-/// `haystack`-relative and ascending/non-overlapping, per `match_score`'s
-/// contract) are used directly as the tie-break key: their length and byte
-/// content vary with the underlying haystack exactly as the matched text
-/// would.
-fn matched_text<'a>(hit: &'a SearchHit<'_>) -> &'a [Range<usize>] {
-    &hit.ranges
 }
 
 #[cfg(test)]
@@ -327,10 +338,11 @@ mod tests {
         assert_eq!(ids, ids_again);
 
         // Exact match ties ("t01", "t05", "t11" all score-match "milk"
-        // exactly in one or both fields) are broken by matched text length
-        // then content then id, giving a fully pinned expected order.
+        // exactly in one or both fields) are broken per fuzzy.rs's
+        // documented contract: the matched field's haystack length, then
+        // its bytes, then id, giving a fully pinned expected order.
         let expected: Vec<&str> = vec![
-            "t01", "t05", "t09", "t11", "t07", "t02", "t06", "t03", "t10", "t12", "t04",
+            "t01", "t05", "t11", "t09", "t07", "t02", "t06", "t03", "t10", "t12", "t04",
         ];
         assert_eq!(ids, expected);
     }
@@ -349,7 +361,12 @@ mod tests {
     }
 
     #[test]
-    fn empty_needle_matches_everything_in_content_with_no_ranges_ordered_by_id() {
+    fn empty_needle_matches_everything_in_content_tie_broken_by_haystack_len_then_id() {
+        // All three tie on score (EMPTY_NEEDLE_SCORE) and on empty ranges,
+        // so per fuzzy.rs's documented contract the tie is broken on the
+        // matched field's haystack length (shorter first), then id: `c`'s
+        // content ("") is shortest, then `b` ("beta", len 4), then `a`
+        // ("alpha", len 5).
         let items = vec![
             item("b", "beta", ""),
             item("c", "", ""),
@@ -358,7 +375,7 @@ mod tests {
 
         let hits = search(&items, "", &SearchScope::All);
 
-        assert_eq!(ids_of(&hits), vec!["a", "b", "c"]);
+        assert_eq!(ids_of(&hits), vec!["c", "b", "a"]);
         for h in &hits {
             assert_eq!(h.score, 0);
             assert_eq!(h.field, MatchedField::Content);
@@ -480,7 +497,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "BUG T-904: search() tie-break uses range-count/spans proxy, not T-902 haystack.len()/haystack order; see report"]
     fn tie_break_prefers_shorter_haystack_per_match_score_docs() {
         // Same score (prefix match of "milk") and identical ranges; the
         // documented rule is shorter haystack first. Ids are chosen so
