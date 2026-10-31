@@ -23,7 +23,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Mirrors T-201 (EPIC-03) which introduced `ApiError` and `src/api/mod.rs`. Error-type-and-wiring only, no engine logic, so the rest of the epic can land in parallel. Reuse the crate-wide `Result<T> = Result<T, AppError>` alias and never interpolate token material (see the `Secret` helper in `src/log.rs`, which must not be modified).",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-502",
