@@ -3,8 +3,8 @@
 //! Clears the stored Todoist API token from **both** token backends via
 //! [`TokenStore::clear`] (T-105, which already attempts the keyring and
 //! the file fallback unconditionally — see its docs) and then runs the
-//! injected [`CacheWipe`] hook (T-108; a no-op until EPIC-04 lands the real
-//! cache database, see [`crate::auth::cache_wipe`]).
+//! injected [`CacheWipe`] hook (T-108; backed by the real SQLite cache
+//! database as of T-309, see [`crate::db::wipe::SqliteCacheWipe`]).
 //!
 //! # Idempotency and partial failure
 //!
@@ -30,7 +30,8 @@
 
 use std::io::{self, Write};
 
-use crate::auth::{CacheWipe, NoopCacheWipe, TokenStore};
+use crate::auth::{CacheWipe, TokenStore};
+use crate::db::wipe::SqliteCacheWipe;
 use crate::error::Result;
 
 /// Runs the `logout` subcommand against the real token store, the
@@ -41,7 +42,12 @@ use crate::error::Result;
 /// Returns whatever [`TokenStore::resolve`] or [`run_logout_with`] return.
 pub fn run_logout() -> Result<()> {
     let store = TokenStore::resolve()?;
-    run_logout_with(&store, &NoopCacheWipe, &mut io::stdout(), &mut io::stderr())
+    run_logout_with(
+        &store,
+        &SqliteCacheWipe,
+        &mut io::stdout(),
+        &mut io::stderr(),
+    )
 }
 
 /// Injectable seam: clears `store` (both backends) and runs `cache`'s
@@ -414,7 +420,7 @@ mod unit_tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::auth::{Token, TokenSource};
+    use crate::auth::{NoopCacheWipe, Token, TokenSource};
     use crate::error::{AppError, AuthError};
 
     /// Canary bearer material for this suite only — fake, never a real
