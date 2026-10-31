@@ -30,6 +30,9 @@ mod db;
 /// Fuzzy matching core for task/filter search (T-902, EPIC-10).
 mod search;
 
+/// Filter query parser for the supported grammar subset (T-903, EPIC-10).
+mod filters;
+
 use std::process::ExitCode;
 
 use config::Config;
@@ -355,8 +358,9 @@ mod bootstrap_tests {
             // T-003 requires `mod error;`, T-004 requires `mod config;`,
             // T-006 requires `mod log;`, T-007 requires `mod cli;`, T-101
             // requires `mod auth;`, T-201 requires `mod api;`, T-301
-            // requires `mod db;`, T-902 requires `mod search;`. The only
-            // other permitted lines are the cfg(test) modules below.
+            // requires `mod db;`, T-902 requires `mod search;`, T-903
+            // requires `mod filters;`. The only other permitted lines are
+            // the cfg(test) modules below.
             .filter(|l| {
                 *l != "mod error;"
                     && *l != "mod config;"
@@ -366,6 +370,7 @@ mod bootstrap_tests {
                     && *l != "mod api;"
                     && *l != "mod db;"
                     && *l != "mod search;"
+                    && *l != "mod filters;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)
