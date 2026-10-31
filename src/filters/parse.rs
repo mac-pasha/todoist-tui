@@ -428,3 +428,243 @@ impl Parser {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Fixture-driven tests for the spike's example queries
+    //! (`docs/manual/epic-10-filter-support.md`, §5, table rows 1-12) plus
+    //! dedicated nested-precedence/parentheses coverage for §4's fixed
+    //! precedence (`!` > `&` > `|`, overridable by explicit parens).
+
+    use super::*;
+
+    fn leaf(l: Leaf) -> FilterAst {
+        FilterAst::Leaf(l)
+    }
+
+    // --- §5 fixture table, rows 1-6: supported-locally -------------------
+
+    /// Row 1: `today` — single leaf.
+    #[test]
+    fn spike_row1_today_is_single_leaf() {
+        assert_eq!(parse("today"), Ok(leaf(Leaf::Today)));
+    }
+
+    /// Row 2: `today & p1` — AND of two leaves.
+    #[test]
+    fn spike_row2_today_and_p1() {
+        assert_eq!(
+            parse("today & p1"),
+            Ok(FilterAst::And(
+                Box::new(leaf(Leaf::Today)),
+                Box::new(leaf(Leaf::Priority(1))),
+            ))
+        );
+    }
+
+    /// Row 3: `#Work & (today | overdue)` — precedence + grouping.
+    #[test]
+    fn spike_row3_project_and_grouped_or() {
+        assert_eq!(
+            parse("#Work & (today | overdue)"),
+            Ok(FilterAst::And(
+                Box::new(leaf(Leaf::Project("Work".to_string()))),
+                Box::new(FilterAst::Or(
+                    Box::new(leaf(Leaf::Today)),
+                    Box::new(leaf(Leaf::Overdue)),
+                )),
+            ))
+        );
+    }
+
+    /// Row 4: `@urgent & !p4` — NOT binds tighter than AND.
+    #[test]
+    fn spike_row4_label_and_not_priority() {
+        assert_eq!(
+            parse("@urgent & !p4"),
+            Ok(FilterAst::And(
+                Box::new(leaf(Leaf::Label("urgent".to_string()))),
+                Box::new(FilterAst::Not(Box::new(leaf(Leaf::Priority(4))))),
+            ))
+        );
+    }
+
+    /// Row 5: `no date & no labels` — both NULL-ish leaves.
+    #[test]
+    fn spike_row5_no_date_and_no_labels() {
+        assert_eq!(
+            parse("no date & no labels"),
+            Ok(FilterAst::And(
+                Box::new(leaf(Leaf::NoDate)),
+                Box::new(leaf(Leaf::NoLabels)),
+            ))
+        );
+    }
+
+    /// Row 6: `#Home | #Errands | #Shopping` — left-associative OR chain.
+    #[test]
+    fn spike_row6_left_associative_or_chain() {
+        assert_eq!(
+            parse("#Home | #Errands | #Shopping"),
+            Ok(FilterAst::Or(
+                Box::new(FilterAst::Or(
+                    Box::new(leaf(Leaf::Project("Home".to_string()))),
+                    Box::new(leaf(Leaf::Project("Errands".to_string()))),
+                )),
+                Box::new(leaf(Leaf::Project("Shopping".to_string()))),
+            ))
+        );
+    }
+
+    // --- §5 fixture table, rows 7-12: unsupported -------------------------
+
+    /// Row 7: `assigned to: me` — `assigned to:` sentinel.
+    #[test]
+    fn spike_row7_assigned_to_is_unsupported() {
+        let err = parse("assigned to: me").unwrap_err();
+        assert_eq!(err.reason, "assigned to:");
+    }
+
+    /// Row 8: `search: dentist` — `search:` sentinel.
+    #[test]
+    fn spike_row8_search_is_unsupported() {
+        let err = parse("search: dentist").unwrap_err();
+        assert_eq!(err.reason, "search:");
+    }
+
+    /// Row 9: `due before: Jan 3` — date range sub-grammar.
+    #[test]
+    fn spike_row9_due_before_is_unsupported() {
+        let err = parse("due before: Jan 3").unwrap_err();
+        assert_eq!(err.reason, "date range");
+    }
+
+    /// Row 10: `#Work & assigned to: alice` — whole-query fallback (§3):
+    /// rejected wholesale, never degraded to just `#Work`.
+    #[test]
+    fn spike_row10_whole_query_fallback_not_partial() {
+        let err = parse("#Work & assigned to: alice").unwrap_err();
+        assert_eq!(err.reason, "assigned to:");
+    }
+
+    /// Row 11: `(today | overdue` — unbalanced parentheses.
+    #[test]
+    fn spike_row11_unbalanced_parens_is_unsupported() {
+        let err = parse("(today | overdue").unwrap_err();
+        assert_eq!(err.reason, "unbalanced parentheses");
+    }
+
+    /// Row 12: `today foo` — unknown bare token / no implicit AND.
+    #[test]
+    fn spike_row12_implicit_and_is_unsupported() {
+        let err = parse("today foo").unwrap_err();
+        assert_eq!(err.reason, "unknown token");
+    }
+
+    // --- §4 precedence: `!` > `&` > `|`, parens override -------------------
+
+    /// `today | overdue & p1` — `&` binds tighter than `|`, so this parses
+    /// as `today | (overdue & p1)`, not `(today | overdue) & p1`.
+    #[test]
+    fn precedence_and_binds_tighter_than_or() {
+        assert_eq!(
+            parse("today | overdue & p1"),
+            Ok(FilterAst::Or(
+                Box::new(leaf(Leaf::Today)),
+                Box::new(FilterAst::And(
+                    Box::new(leaf(Leaf::Overdue)),
+                    Box::new(leaf(Leaf::Priority(1))),
+                )),
+            ))
+        );
+    }
+
+    /// `!today & overdue | p1` — `!` binds tighter than `&`, which binds
+    /// tighter than `|`: parses as `((!today) & overdue) | p1`.
+    #[test]
+    fn precedence_not_binds_tighter_than_and_and_or() {
+        assert_eq!(
+            parse("!today & overdue | p1"),
+            Ok(FilterAst::Or(
+                Box::new(FilterAst::And(
+                    Box::new(FilterAst::Not(Box::new(leaf(Leaf::Today)))),
+                    Box::new(leaf(Leaf::Overdue)),
+                )),
+                Box::new(leaf(Leaf::Priority(1))),
+            ))
+        );
+    }
+
+    /// `(today | overdue) & !(p1 | p2)` — explicit parentheses override the
+    /// default precedence on both sides, nesting `|` inside `&` and `!`
+    /// inside a second group.
+    #[test]
+    fn precedence_explicit_parens_override_default_precedence() {
+        assert_eq!(
+            parse("(today | overdue) & !(p1 | p2)"),
+            Ok(FilterAst::And(
+                Box::new(FilterAst::Or(
+                    Box::new(leaf(Leaf::Today)),
+                    Box::new(leaf(Leaf::Overdue)),
+                )),
+                Box::new(FilterAst::Not(Box::new(FilterAst::Or(
+                    Box::new(leaf(Leaf::Priority(1))),
+                    Box::new(leaf(Leaf::Priority(2))),
+                )))),
+            ))
+        );
+    }
+
+    /// `!(today & overdue) | (p1 & !p2)` — a fourth nested example mixing
+    /// a negated group on the left of `|` with a negated leaf nested
+    /// inside an `&` group on the right.
+    #[test]
+    fn precedence_nested_not_group_or_and_group() {
+        assert_eq!(
+            parse("!(today & overdue) | (p1 & !p2)"),
+            Ok(FilterAst::Or(
+                Box::new(FilterAst::Not(Box::new(FilterAst::And(
+                    Box::new(leaf(Leaf::Today)),
+                    Box::new(leaf(Leaf::Overdue)),
+                )))),
+                Box::new(FilterAst::And(
+                    Box::new(leaf(Leaf::Priority(1))),
+                    Box::new(FilterAst::Not(Box::new(leaf(Leaf::Priority(2))))),
+                )),
+            ))
+        );
+    }
+
+    // --- extra parser-correctness coverage ---------------------------------
+
+    #[test]
+    fn unknown_bare_word_is_unsupported() {
+        let err = parse("frobnicate").unwrap_err();
+        assert_eq!(err.reason, "unknown token");
+    }
+
+    #[test]
+    fn unbalanced_closing_paren_is_unsupported() {
+        assert!(parse("today)").is_err());
+    }
+
+    #[test]
+    fn label_names_are_case_sensitive() {
+        assert_eq!(
+            parse("@Urgent"),
+            Ok(leaf(Leaf::Label("Urgent".to_string())))
+        );
+        assert_ne!(parse("@Urgent"), parse("@urgent"));
+    }
+
+    #[test]
+    fn project_keyword_matching_is_case_insensitive() {
+        assert_eq!(parse("TODAY"), Ok(leaf(Leaf::Today)));
+    }
+
+    #[test]
+    fn no_due_date_and_no_label_aliases_parse_as_expected_leaves() {
+        assert_eq!(parse("no due date"), Ok(leaf(Leaf::NoDate)));
+        assert_eq!(parse("no label"), Ok(leaf(Leaf::NoLabels)));
+    }
+}
