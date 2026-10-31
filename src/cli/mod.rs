@@ -10,17 +10,22 @@
 //! [`crate::error::AuthError::NotAuthenticated`] otherwise; [`run`] itself
 //! returns [`crate::error::AppError::NotImplemented`] unguarded when no
 //! subcommand is given (the default TUI path, not built yet). `main` maps
-//! errors to a stderr message and exit code 1.
+//! errors to a stderr message and a process exit code via
+//! [`crate::error::exit_code`] (T-1001, EPIC-11).
 //!
 //! [`build_cli`] exposes the underlying [`clap::Command`] (via
 //! [`clap::CommandFactory`]) as a plain function so CLI tests (trycmd /
 //! `assert_cmd`) can assert on `--help` / `--version` output without
 //! spawning the binary, and so [`clap::Command::debug_assert`] has a
 //! reachable call site.
+//!
+//! The global `--no-color` flag (T-1001) and `NO_COLOR` env var both
+//! disable colour for one-shot subcommand printing through [`output::Output`].
 
 pub mod auth;
 pub mod commands;
 pub mod logout;
+pub mod output;
 
 use std::path::PathBuf;
 
@@ -44,6 +49,11 @@ pub struct Cli {
     /// directory resolved by `config::paths`).
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
+
+    /// Disables colour/ANSI output for one-shot subcommand printing,
+    /// regardless of whether stdout is a TTY (T-1001, EPIC-11).
+    #[arg(long, global = true)]
+    pub no_color: bool,
 
     /// Subcommand to run; omitted means "launch the TUI".
     #[command(subcommand)]

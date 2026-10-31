@@ -40,7 +40,8 @@ pub enum AppError {
     Log(#[from] LogError),
 
     /// A CLI subcommand is stubbed out; carries the subcommand name
-    /// (T-007 maps this to a stderr message and exit code 1).
+    /// (T-007 maps this to a stderr message; T-1001's `exit_code` maps it
+    /// to the generic failure code).
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
 
@@ -55,6 +56,45 @@ pub enum AppError {
     /// The local SQLite store (open, migrate, read/write, EPIC-04) failed.
     #[error("db: {0}")]
     Db(#[from] DbError),
+
+    /// A one-shot CLI command (non-interactive output / exit-code mapping,
+    /// T-1001, EPIC-11) failed.
+    #[error("cli: {0}")]
+    Cli(#[from] CliError),
+}
+
+/// Maps an [`AppError`] to a process exit code for `main`'s one-shot CLI
+/// commands (T-1001, EPIC-11).
+///
+/// `0` (success) is never returned here: every branch of `AppError` is a
+/// failure, so `main` only calls this function on its `Err` path and keeps
+/// `0` reserved for `Ok`. Authentication failures
+/// ([`AuthError::NotAuthenticated`], [`CliError::NotAuthenticated`]) map to
+/// one dedicated code (matching the exit code pre-T-1001 callers of `main`
+/// already observe for this class, per the integration tests in
+/// `tests/cli.rs`/`tests/auth_cli.rs`); offline/transport failures
+/// ([`CliError::Offline`], [`ApiError::Transport`]) map to a second,
+/// distinct dedicated code; every other failure falls back to the generic
+/// code. Clap itself exits the process with its own usage-error code (2)
+/// before argument parsing ever reaches `main`'s error path, so this
+/// function never needs to (and must not) reproduce code 2.
+#[must_use]
+pub fn exit_code(error: &AppError) -> i32 {
+    /// Fallback code for every failure that is not one of the dedicated
+    /// classes below.
+    const GENERIC_FAILURE: i32 = 1;
+    /// Dedicated code for authentication failures.
+    const NOT_AUTHENTICATED: i32 = 1;
+    /// Dedicated code for offline / transport failures.
+    const OFFLINE: i32 = 4;
+
+    match error {
+        AppError::Auth(AuthError::NotAuthenticated) | AppError::Cli(CliError::NotAuthenticated) => {
+            NOT_AUTHENTICATED
+        }
+        AppError::Cli(CliError::Offline) | AppError::Api(ApiError::Transport { .. }) => OFFLINE,
+        _ => GENERIC_FAILURE,
+    }
 }
 
 /// Errors raised while loading the TOML config file.
@@ -325,6 +365,36 @@ pub enum DbError {
     Permissions {
         /// Database file with the permission problem.
         path: PathBuf,
+    },
+}
+
+/// Errors raised by the non-interactive one-shot CLI commands' output /
+/// exit-code handling (T-1001, EPIC-11).
+///
+/// No variant here may carry raw token material; `NotAuthenticated` only
+/// forwards the same unit variant shape as [`AuthError::NotAuthenticated`]
+/// (constructed by CLI command code that wants a dedicated
+/// `AppError::Cli(..)` path distinct from `AppError::Auth(..)`), `Offline`
+/// is unit, and `Io` wraps an opaque [`io::Error`].
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum CliError {
+    /// No token is available; mirrors [`AuthError::NotAuthenticated`] for
+    /// CLI call sites that raise the condition directly as a `CliError`.
+    #[error("not authenticated: no API token is stored; run `todoist-tui auth` to add one")]
+    NotAuthenticated,
+
+    /// The command requires network access but none is available (DNS,
+    /// connect, or timeout failure below the API-client layer).
+    #[error("offline: could not reach the Todoist API")]
+    Offline,
+
+    /// Writing command output (stdout/stderr) failed at the OS level.
+    #[error("CLI output I/O failed: {source}")]
+    Io {
+        /// Underlying OS error.
+        #[source]
+        source: io::Error,
     },
 }
 

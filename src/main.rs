@@ -32,12 +32,14 @@ mod search;
 
 use std::process::ExitCode;
 
+use cli::output::Output;
 use config::Config;
 use error::AppError;
 use log::LogOptions;
 
 fn main() -> ExitCode {
     let cli = cli::parse();
+    let mut output = Output::for_process(cli.no_color);
 
     // `--config` is accepted on the CLI surface in this task; T-005's loader
     // only resolves the platform-default path today, so an explicit override
@@ -49,28 +51,39 @@ fn main() -> ExitCode {
     };
     let _config = match config_result {
         Ok(config) => config,
-        Err(error) => return fail(&error),
+        Err(error) => return fail(&mut output, &error),
     };
 
     // Hold the guard for the process lifetime: dropping it flushes buffered
     // log records and stops the writer thread.
     let _log_guard = match log::init(LogOptions::new()) {
         Ok(guard) => guard,
-        Err(error) => return fail(&error),
+        Err(error) => return fail(&mut output, &error),
     };
 
     match cli::run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => fail(&error),
+        Err(error) => fail(&mut output, &error),
     }
 }
 
-/// Prints `error` to stderr and returns exit code 1 — no panic, no
-/// backtrace, used for every failure path in `main` (config load, log init,
-/// subcommand dispatch).
-fn fail(error: &AppError) -> ExitCode {
-    eprintln!("{error}");
-    ExitCode::FAILURE
+/// Prints `error` to stderr (through [`Output`], never with a raw
+/// `eprintln!`) and returns the process exit code [`error::exit_code`] maps
+/// it to (T-1001, EPIC-11) — no panic, no backtrace, used for every failure
+/// path in `main` (config load, log init, subcommand dispatch).
+fn fail<O: std::io::Write, E: std::io::Write>(
+    output: &mut Output<O, E>,
+    error: &AppError,
+) -> ExitCode {
+    // A write failure here has no sane recovery (stderr is already gone);
+    // falling back to a raw `eprintln!` keeps the error visible instead of
+    // silently swallowing it.
+    if output.write_error_line(&error.to_string()).is_err() {
+        eprintln!("{error}");
+    }
+    let code = error::exit_code(error).clamp(0, i32::from(u8::MAX));
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    ExitCode::from(code as u8)
 }
 
 /// Bootstrap invariants for T-001 (EPIC-01).
