@@ -1,4 +1,4 @@
-//! Row (de)serialisation for Sync API resources (T-306, EPIC-04).
+//! Row (de)serialisation for Sync API resources (T-305/T-306, EPIC-04).
 //!
 //! Each submodule owns upsert/delete (or, for `day_orders`, a wholesale
 //! `replace_all`) for one Sync API resource table from `schema.sql`,
@@ -11,6 +11,11 @@
 //! `notes.item_id` column (`NOT NULL`); see [`note`]'s module doc for how
 //! project-level notes (which carry a `project_id` instead of an
 //! `item_id`) are represented there without a schema change.
+//!
+//! `user` is the one single-row resource here: it is keyed by the
+//! authenticated account's own id, and [`user::upsert`] removes any other
+//! row before writing so the table never holds more than one account's
+//! data at a time (see [`user`]'s module doc).
 
 // `pub` alone does not silence `dead_code` in a binary crate — same
 // pattern as `db::mod` and the other EPIC-04 module scaffolds.
@@ -19,5 +24,10 @@
 #![allow(dead_code)]
 
 pub mod day_order;
+pub mod filter;
 pub mod item;
+pub mod label;
 pub mod note;
+pub mod project;
+pub mod section;
+pub mod user;
