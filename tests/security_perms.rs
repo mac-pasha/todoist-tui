@@ -32,12 +32,21 @@ mod paths;
 mod log;
 
 /// Path shim for the included files' `crate::config::...` references.
+///
+/// `test_support::ENV_LOCK` is re-exported from this file's own
+/// [`ENV_MUTEX`] (not a second, independent `Mutex`) so that
+/// `src/config/paths.rs`'s own env-mutating tests (`paths::tests`,
+/// `paths::unit_tests`, included into this same test binary) serialise
+/// against *this* file's env-mutating tests too. Two separate mutexes here
+/// would each individually "work" but not guard against each other,
+/// leaving exactly the kind of cross-module env race this file exists to
+/// prevent.
 #[allow(unused_imports)]
 mod config {
     pub(crate) use crate::paths;
 
     pub(crate) mod test_support {
-        pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        pub(crate) use crate::ENV_MUTEX as ENV_LOCK;
     }
 }
 
@@ -57,6 +66,14 @@ use std::sync::Mutex;
 use crate::support::{MockSyncApi, TestHome, FAKE_TOKEN};
 
 /// Serialises tests that mutate this process's environment (XDG vars).
+///
+/// Every test that calls `std::env::set_var`/`remove_var` directly (via
+/// [`open_cache_in`]) *or* spawns the binary (via [`run_auth`] /
+/// `TestHome::command`) must hold this lock first: `Command::spawn`
+/// snapshots the whole process environment, and reading it concurrently
+/// with an unguarded `set_var`/`remove_var` on another thread is a data
+/// race (std's env functions are not internally synchronised), not just a
+/// logical race over which XDG root wins.
 static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 fn mode(path: &Path) -> u32 {
@@ -137,6 +154,9 @@ fn reopening_a_world_readable_cache_db_tightens_it_to_0600() {
 #[tokio::test]
 async fn auth_writes_the_file_backed_token_as_0600() {
     let api = MockSyncApi::full_sync().await;
+    let _env = ENV_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::without_token(&api.base_url());
     let out = run_auth(&home, FAKE_TOKEN);
     assert!(
@@ -154,6 +174,9 @@ async fn auth_writes_the_file_backed_token_as_0600() {
 /// this test must be updated deliberately.
 #[test]
 fn preexisting_world_readable_token_is_accepted_and_not_tightened_on_read() {
+    let _env = ENV_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new("http://127.0.0.1:1");
     let token = home.token_file();
     fs::set_permissions(&token, fs::Permissions::from_mode(0o644)).unwrap();
@@ -172,6 +195,9 @@ fn preexisting_world_readable_token_is_accepted_and_not_tightened_on_read() {
 #[tokio::test]
 async fn auth_retightens_a_preexisting_world_readable_token_file() {
     let api = MockSyncApi::full_sync().await;
+    let _env = ENV_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new(&api.base_url());
     let token = home.token_file();
     fs::set_permissions(&token, fs::Permissions::from_mode(0o666)).unwrap();
@@ -202,6 +228,9 @@ fn cache_db_parent_dir_is_mode_0700() {
 #[ignore = "BUG T-1105: config dir is created with umask default (0755), not 0700"]
 async fn token_parent_dir_is_mode_0700() {
     let api = MockSyncApi::full_sync().await;
+    let _env = ENV_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::without_token(&api.base_url());
     let out = run_auth(&home, FAKE_TOKEN);
     assert!(out.status.success());
