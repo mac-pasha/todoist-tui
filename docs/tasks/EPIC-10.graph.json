@@ -187,7 +187,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Discovered by the T-908 perf-test author: match_score allocates 4 fresh Vec<Vec<_>> DP matrices per call; search() calls it up to 2x per item x 5000 items per keystroke, measured at 25-90ms p95 in release (budget is 16ms). Root cause is allocation churn, not algorithmic complexity - prefer reusing flat Vec<T> scratch buffers (indexed manually) sized once per search() call over the 2D Vec<Vec<_>> approach, or threading a reusable scratch struct through match_score. Keep the diff minimal and behavior-preserving; T-908 depends on this landing first and will re-measure against it.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-908",
