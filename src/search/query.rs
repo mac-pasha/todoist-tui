@@ -334,4 +334,184 @@ mod tests {
         ];
         assert_eq!(ids, expected);
     }
+
+    // ---- adversarial tests (T-904 unit-tester) ----
+
+    fn ids_of<'a>(hits: &[SearchHit<'a>]) -> Vec<&'a str> {
+        hits.iter().map(|h| h.id).collect()
+    }
+
+    #[test]
+    fn empty_items_slice_returns_no_hits() {
+        let items: Vec<SearchItem> = Vec::new();
+        assert!(search(&items, "milk", &SearchScope::All).is_empty());
+        assert!(search(&items, "", &SearchScope::All).is_empty());
+    }
+
+    #[test]
+    fn empty_needle_matches_everything_in_content_with_no_ranges_ordered_by_id() {
+        let items = vec![
+            item("b", "beta", ""),
+            item("c", "", ""),
+            item("a", "alpha", "desc"),
+        ];
+
+        let hits = search(&items, "", &SearchScope::All);
+
+        assert_eq!(ids_of(&hits), vec!["a", "b", "c"]);
+        for h in &hits {
+            assert_eq!(h.score, 0);
+            assert_eq!(h.field, MatchedField::Content);
+            assert!(h.ranges.is_empty());
+        }
+    }
+
+    #[test]
+    fn empty_needle_respects_current_view_scope() {
+        let items = vec![item("a", "x", ""), item("b", "y", "")];
+        let ids: HashSet<String> = ["b".to_string()].into_iter().collect();
+
+        let hits = search(&items, "", &SearchScope::CurrentView { ids: &ids });
+
+        assert_eq!(ids_of(&hits), vec!["b"]);
+    }
+
+    #[test]
+    fn needle_matching_neither_field_returns_nothing_for_every_item() {
+        let items = vec![item("a", "alpha", "beta"), item("b", "gamma", "delta")];
+        assert!(search(&items, "zzz", &SearchScope::All).is_empty());
+    }
+
+    #[test]
+    fn needle_longer_than_both_fields_returns_nothing() {
+        let items = vec![item("a", "ab", "cd")];
+        assert!(search(&items, "abcdef", &SearchScope::All).is_empty());
+    }
+
+    #[test]
+    fn current_view_with_id_absent_from_items_is_ignored() {
+        let items = vec![item("t1", "milk", "")];
+        let ids: HashSet<String> = ["ghost".to_string()].into_iter().collect();
+        assert!(search(&items, "milk", &SearchScope::CurrentView { ids: &ids }).is_empty());
+
+        let ids: HashSet<String> = ["ghost".to_string(), "t1".to_string()]
+            .into_iter()
+            .collect();
+        let hits = search(&items, "milk", &SearchScope::CurrentView { ids: &ids });
+        assert_eq!(ids_of(&hits), vec!["t1"]);
+    }
+
+    #[test]
+    fn current_view_id_match_is_exact_and_case_sensitive() {
+        let items = vec![item("T1", "milk", ""), item("t1x", "milk", "")];
+        let ids: HashSet<String> = ["t1".to_string()].into_iter().collect();
+        assert!(search(&items, "milk", &SearchScope::CurrentView { ids: &ids }).is_empty());
+    }
+
+    #[test]
+    fn all_scope_returns_same_as_view_containing_every_id() {
+        let items = vec![
+            item("t1", "milk run", "x"),
+            item("t2", "oat milk", "y"),
+            item("t3", "nothing", "z"),
+        ];
+        let ids: HashSet<String> = items.iter().map(|i| i.id.clone()).collect();
+        let all = search(&items, "milk", &SearchScope::All);
+        let view = search(&items, "milk", &SearchScope::CurrentView { ids: &ids });
+        assert_eq!(all, view);
+    }
+
+    #[test]
+    fn duplicate_ids_each_produce_a_hit() {
+        let items = vec![item("dup", "milk", ""), item("dup", "milk", "")];
+        let hits = search(&items, "milk", &SearchScope::All);
+        assert_eq!(ids_of(&hits), vec!["dup", "dup"]);
+    }
+
+    #[test]
+    fn duplicate_ids_in_view_scope_are_both_kept() {
+        let items = vec![item("dup", "milk", ""), item("dup", "oat milk", "")];
+        let ids: HashSet<String> = ["dup".to_string()].into_iter().collect();
+        let hits = search(&items, "milk", &SearchScope::CurrentView { ids: &ids });
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn equal_scores_on_both_fields_prefer_content() {
+        let items = vec![item("t1", "milk", "milk")];
+        let hits = search(&items, "milk", &SearchScope::All);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].field, MatchedField::Content);
+    }
+
+    #[test]
+    fn hit_ranges_are_from_the_reported_field() {
+        let items = vec![item("t1", "zzz", "xx milk")];
+        let hits = search(&items, "milk", &SearchScope::All);
+        assert_eq!(hits[0].field, MatchedField::Description);
+        assert_eq!(
+            hits[0].ranges,
+            match_score("milk", "xx milk").unwrap().ranges
+        );
+    }
+
+    #[test]
+    fn identical_items_are_tie_broken_by_id_regardless_of_input_order() {
+        let forward = vec![
+            item("a", "milk", ""),
+            item("b", "milk", ""),
+            item("c", "milk", ""),
+        ];
+        let reversed = vec![
+            item("c", "milk", ""),
+            item("b", "milk", ""),
+            item("a", "milk", ""),
+        ];
+        let f = search(&forward, "milk", &SearchScope::All);
+        let r = search(&reversed, "milk", &SearchScope::All);
+        assert_eq!(ids_of(&f), vec!["a", "b", "c"]);
+        assert_eq!(ids_of(&r), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    #[ignore = "BUG T-904: search() tie-break uses range-count/spans proxy, not T-902 haystack.len()/haystack order; see report"]
+    fn tie_break_prefers_shorter_haystack_per_match_score_docs() {
+        // Same score (prefix match of "milk") and identical ranges; the
+        // documented rule is shorter haystack first. Ids are chosen so
+        // that id order contradicts it.
+        let items = vec![
+            item("a", "milk and a great many other words", ""),
+            item("b", "milk", ""),
+        ];
+        let s_long = match_score("milk", &items[0].content).unwrap();
+        let s_short = match_score("milk", &items[1].content).unwrap();
+        assert_eq!(s_long.score, s_short.score, "fixture must tie on score");
+
+        let hits = search(&items, "milk", &SearchScope::All);
+
+        assert_eq!(ids_of(&hits), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn multibyte_content_does_not_panic_and_ranges_are_char_boundaries() {
+        let items = vec![item("t1", "café ünï milk", "日本語 のメモ")];
+        let hits = search(&items, "ünï", &SearchScope::All);
+        assert_eq!(hits.len(), 1);
+        for r in &hits[0].ranges {
+            assert!(items[0].content.is_char_boundary(r.start));
+            assert!(items[0].content.is_char_boundary(r.end));
+        }
+        let hits = search(&items, "メモ", &SearchScope::All);
+        assert_eq!(hits[0].field, MatchedField::Description);
+    }
+
+    #[test]
+    fn section_id_and_project_id_are_not_searched() {
+        let mut it = item("t1", "alpha", "beta");
+        it.project_id = "uniqueproj".to_string();
+        it.section_id = Some("uniquesect".to_string());
+        let items = vec![it];
+        assert!(search(&items, "uniqueproj", &SearchScope::All).is_empty());
+        assert!(search(&items, "uniquesect", &SearchScope::All).is_empty());
+    }
 }
