@@ -222,7 +222,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "The seam is already in place from T-108: read `src/auth/cache_wipe.rs` and the `run_logout_with(...)` injection point in `src/cli/logout.rs`. Keep the trait definition untouched; only the concrete impl and the wiring change.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-310",
