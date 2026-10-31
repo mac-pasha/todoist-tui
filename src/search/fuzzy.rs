@@ -79,6 +79,41 @@ struct CharInfo {
     folded: char,
 }
 
+/// ASCII fast path for `char::to_lowercase().next().unwrap_or(c)`:
+/// for ASCII, lowercasing is a single offset on `A`-`Z` and identity
+/// otherwise, so the (expensive) Unicode lowercase iterator is only
+/// needed for non-ASCII chars. Behaviour is identical to the slow path for
+/// every `char` — this exists purely because `match_score` classifies
+/// every needle/haystack char on every call (T-912 hot path) and the
+/// Unicode tables dominated the profile once allocation churn was fixed.
+fn fold_char(c: char) -> char {
+    if c.is_ascii() {
+        if c.is_ascii_uppercase() {
+            ((c as u8) - b'A' + b'a') as char
+        } else {
+            c
+        }
+    } else {
+        c.to_lowercase().next().unwrap_or(c)
+    }
+}
+
+/// ASCII fast path for `char::is_alphanumeric`, same reasoning as
+/// [`fold_char`]. Identical results, cheaper for the common ASCII case.
+fn is_alphanumeric_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || (!c.is_ascii() && c.is_alphanumeric())
+}
+
+/// ASCII fast path for `char::is_lowercase`, same reasoning as [`fold_char`].
+fn is_lowercase_char(c: char) -> bool {
+    c.is_ascii_lowercase() || (!c.is_ascii() && c.is_lowercase())
+}
+
+/// ASCII fast path for `char::is_uppercase`, same reasoning as [`fold_char`].
+fn is_uppercase_char(c: char) -> bool {
+    c.is_ascii_uppercase() || (!c.is_ascii() && c.is_uppercase())
+}
+
 fn char_infos(s: &str) -> Vec<CharInfo> {
     s.char_indices()
         .map(|(byte_start, ch)| CharInfo {
@@ -94,19 +129,74 @@ fn char_infos(s: &str) -> Vec<CharInfo> {
         .collect()
 }
 
+/// Greedy case-insensitive subsequence test on `fold_char`-folded chars.
+///
+/// Exactly the predicate the DP decides with `d_score <= NEG` (a
+/// subsequence exists iff the DP can align all needle chars), but a
+/// single two-pointer pass with no buffers at all. Used as a cheap
+/// pre-check in `match_score_in` so non-matching haystacks skip the char
+/// tables, word-boundary pass and the entire DP (T-912 hot path).
+///
+/// The caller must have already handled the empty needle (which trivially
+/// matches everything).
+fn is_folded_subsequence(needle: &str, haystack: &str) -> bool {
+    let mut hay = haystack.chars().map(fold_char);
+    'needle: for nch in needle.chars().map(fold_char) {
+        for hch in hay.by_ref() {
+            if hch == nch {
+                continue 'needle;
+            }
+        }
+        return false;
+    }
+    true
+}
+
+/// Fills `buf` with the [`CharInfo`]s for `s`, clearing anything left over
+/// from a previous use of the same buffer. Returns the filled prefix as a
+/// slice.
+///
+/// Scratch-buffer twin of [`char_infos`] (see [`MatchScratch`] for why the
+/// hot path avoids per-call `Vec` allocation).
+fn char_infos_into<'a>(buf: &'a mut Vec<CharInfo>, s: &str) -> &'a [CharInfo] {
+    buf.clear();
+    buf.reserve(s.chars().count());
+    buf.extend(s.char_indices().map(|(byte_start, ch)| CharInfo {
+        byte_start,
+        byte_len: ch.len_utf8(),
+        original: ch,
+        folded: fold_char(ch),
+    }));
+    buf
+}
+
 fn is_word_boundary(hay: &[CharInfo], index: usize) -> bool {
     if index == 0 {
         return true;
     }
     let prev = hay[index - 1].original;
     let cur = hay[index].original;
-    if !prev.is_alphanumeric() && cur.is_alphanumeric() {
+    if !is_alphanumeric_char(prev) && is_alphanumeric_char(cur) {
         return true;
     }
-    if prev.is_lowercase() && cur.is_uppercase() {
+    if is_lowercase_char(prev) && is_uppercase_char(cur) {
         return true;
     }
     false
+}
+
+/// Fills `buf` with the per-position word-boundary flags for `hay_chars`,
+/// reusing the buffer's existing allocation.
+///
+/// Scratch-buffer twin of the old `boundary` collection in
+/// `match_score_in` (see [`MatchScratch`]).
+fn fill_boundaries<'a>(buf: &'a mut Vec<bool>, hay_chars: &[CharInfo]) -> &'a [bool] {
+    buf.clear();
+    buf.resize(hay_chars.len(), false);
+    for (j, flag) in buf.iter_mut().enumerate() {
+        *flag = is_word_boundary(hay_chars, j);
+    }
+    buf
 }
 
 /// Returns `Some(MatchScore)` when `needle` is a case-insensitive
@@ -114,105 +204,244 @@ fn is_word_boundary(hay: &[CharInfo], index: usize) -> bool {
 ///
 /// An empty `needle` always matches, with a constant [`EMPTY_NEEDLE_SCORE`]
 /// and no matched ranges.
+///
+/// This allocates a throwaway [`MatchScratch`] for the single call; callers
+/// that run many matches in one logical operation (e.g.
+/// [`crate::search::query::search`] matching thousands of items per
+/// keystroke, T-908/T-912) should instead create one `MatchScratch` and
+/// call [`match_score_in`] directly so the DP buffers are reused across
+/// calls instead of reallocated on every one.
 pub fn match_score(needle: &str, haystack: &str) -> Option<MatchScore> {
-    let needle_chars = char_infos(needle);
-    if needle_chars.is_empty() {
-        return Some(MatchScore {
-            score: EMPTY_NEEDLE_SCORE,
-            ranges: Vec::new(),
-        });
-    }
+    let mut scratch = MatchScratch::new();
+    match_score_in(needle, haystack, &mut scratch)
+}
 
-    let hay_chars = char_infos(haystack);
-    let n = needle_chars.len();
-    let m = hay_chars.len();
-    if n > m {
+/// Same matching/scoring logic as [`match_score`], but takes a caller-owned
+/// [`MatchScratch`] so the DP buffers it needs can be reused across many
+/// calls (e.g. one per item per keystroke in [`crate::search::query::search`])
+/// instead of being freshly allocated every time. See [`MatchScratch`] for
+/// why this matters.
+pub(crate) fn match_score_in(
+    needle: &str,
+    haystack: &str,
+    scratch: &mut MatchScratch,
+) -> Option<MatchScore> {
+    // Preprocessing fills scratch's per-char buffers; the DP fill below
+    // then reads them back out of the scratch, so the field borrows end
+    // before `fill_score_tables` takes the whole struct.
+    //
+    // Cheap pre-check: while the user is narrowing results, most haystacks
+    // are not even a subsequence match, and this two-pointer pass (no
+    // buffers, no tables) rejects those far cheaper than running the DP
+    // and inspecting `d_score`. A `true` result is inconclusive on score,
+    // so the DP still runs.
+    if !is_folded_subsequence(needle, haystack) {
         return None;
     }
 
-    let boundary: Vec<bool> = (0..m).map(|j| is_word_boundary(&hay_chars, j)).collect();
+    {
+        let MatchScratch {
+            needle_chars: needle_buf,
+            hay_chars: hay_buf,
+            boundary: boundary_buf,
+            ..
+        } = scratch;
 
-    let tables = build_score_tables(&needle_chars, &hay_chars, &boundary);
+        let needle_chars = char_infos_into(needle_buf, needle);
+        if needle_chars.is_empty() {
+            return Some(MatchScore {
+                score: EMPTY_NEEDLE_SCORE,
+                ranges: Vec::new(),
+            });
+        }
 
-    if tables.d_score[n][m] <= NEG {
+        let hay_chars = char_infos_into(hay_buf, haystack);
+        if needle_chars.len() > hay_chars.len() {
+            return None;
+        }
+
+        fill_boundaries(boundary_buf, hay_chars);
+    }
+
+    fill_score_tables(scratch);
+
+    let n = scratch.needle_chars.len();
+    let m = scratch.hay_chars.len();
+    let width = scratch.width();
+    let final_score = scratch.d_score[n * width + m];
+    if final_score <= NEG {
         return None;
     }
 
     // Backtrack through `d_arg`/`came_from_contiguous` to recover the
     // haystack positions (1-indexed) matched by each needle char.
-    let mut positions = vec![0usize; n];
-    let mut j = tables.d_arg[n][m];
+    scratch.positions.clear();
+    scratch.positions.resize(n, 0);
+    let mut j = scratch.d_arg[n * width + m];
     for i in (1..=n).rev() {
-        positions[i - 1] = j;
+        scratch.positions[i - 1] = j;
         if i > 1 {
-            j = if tables.came_from_contiguous[i][j] {
+            j = if scratch.came_from_contiguous[i * width + j] {
                 j - 1
             } else {
-                tables.d_arg[i - 1][j - 1]
+                scratch.d_arg[(i - 1) * width + (j - 1)]
             };
         }
     }
 
-    let ranges = merge_ranges(&hay_chars, &positions);
+    let ranges = merge_ranges(&scratch.hay_chars, &scratch.positions);
 
     Some(MatchScore {
-        score: tables.d_score[n][m],
+        score: final_score,
         ranges,
     })
 }
 
-/// The dynamic-programming score matrices used by [`match_score`], and the
-/// backtracking metadata needed to recover the matched haystack positions.
+/// Reusable scratch buffers for the dynamic-programming score matrices
+/// used by [`match_score_in`].
 ///
-/// All matrices are `(n + 1) x (m + 1)`, 1-indexed on both axes so index 0
-/// cleanly represents "no needle chars consumed yet" / "before the start of
-/// the haystack".
-struct ScoreTables {
-    /// `m_score[i][j]`: best score aligning `needle[..i]` to `haystack[..j]`
-    /// such that needle char `i` matches haystack char `j` (1-indexed).
-    m_score: Vec<Vec<i64>>,
-    /// `came_from_contiguous[i][j]`: whether that best score extended a
-    /// contiguous run from `m_score[i - 1][j - 1]` (true) or started a new
-    /// run after a gap, anchored on `d_score[i - 1][j - 1]` (false).
-    came_from_contiguous: Vec<Vec<bool>>,
-    /// `d_score[i][j]`: best score aligning `needle[..i]` into
+/// [`match_score`] used to allocate four fresh `Vec<Vec<_>>` matrices
+/// (`m_score`, `came_from_contiguous`, `d_score`, `d_arg`) on *every* call.
+/// `search()` (T-904) calls `match_score` up to twice per item — once for
+/// `content`, once for `description` — across up to 5000 items per
+/// keystroke, so that is up to 10000 * 4 allocations (plus the inner `Vec`
+/// of each row) per keystroke, which measured at 25-90ms p95 in release
+/// against a 16ms budget (T-908/T-912).
+///
+/// `MatchScratch` replaces the four `Vec<Vec<_>>` matrices with four flat
+/// `Vec<T>` buffers addressed as `row * width + col`, allocated once and
+/// grown (never shrunk) only when a later call needs a bigger matrix than
+/// any call seen so far. A caller that keeps one `MatchScratch` alive for
+/// the whole `search()` invocation and passes it to [`match_score_in`] for
+/// every item pays for the growth at most a handful of times (as the
+/// buffers ratchet up to the largest `content`/`description` seen) instead
+/// of once per call.
+///
+/// All matrices are logically `(n + 1) x (m + 1)`, 1-indexed on both axes
+/// so index 0 cleanly represents "no needle chars consumed yet" / "before
+/// the start of the haystack", same as the old `Vec<Vec<_>>` layout.
+#[derive(Default)]
+pub(crate) struct MatchScratch {
+    /// Needle chars + 1 the DP buffers are currently sized for.
+    needle_max: usize,
+    /// Haystack chars + 1 the DP buffers are currently sized for (also the
+    /// row stride for all four flat buffers).
+    hay_max: usize,
+    /// `m_score[i * cols + j]`: best score aligning `needle[..i]` to
+    /// `haystack[..j]` such that needle char `i` matches haystack char `j`
+    /// (1-indexed).
+    m_score: Vec<i64>,
+    /// `came_from_contiguous[i * cols + j]`: whether that best score
+    /// extended a contiguous run from `m_score[(i - 1) * cols + (j - 1)]`
+    /// (true) or started a new run after a gap, anchored on
+    /// `d_score[(i - 1) * cols + (j - 1)]` (false).
+    came_from_contiguous: Vec<bool>,
+    /// `d_score[i * cols + j]`: best score aligning `needle[..i]` into
     /// `haystack[..j]` without requiring a match at `j` itself.
-    d_score: Vec<Vec<i64>>,
-    /// `d_arg[i][j]`: the haystack position (1-indexed) that achieved
-    /// `d_score[i][j]`, used to backtrack.
-    d_arg: Vec<Vec<usize>>,
+    d_score: Vec<i64>,
+    /// `d_arg[i * cols + j]`: the haystack position (1-indexed) that
+    /// achieved `d_score[i * cols + j]`, used to backtrack.
+    d_arg: Vec<usize>,
+    /// Reusable buffers for the per-call preprocessing steps, so those do
+    /// not allocate per call either (they were the next-largest per-call
+    /// allocation source after the DP matrices themselves).
+    needle_chars: Vec<CharInfo>,
+    hay_chars: Vec<CharInfo>,
+    boundary: Vec<bool>,
+    positions: Vec<usize>,
 }
 
-fn build_score_tables(
-    needle_chars: &[CharInfo],
-    hay_chars: &[CharInfo],
-    boundary: &[bool],
-) -> ScoreTables {
-    let n = needle_chars.len();
-    let m = hay_chars.len();
+impl MatchScratch {
+    /// Creates an empty scratch; buffers are allocated lazily by
+    /// [`Self::ensure_capacity`] and the preprocessing helpers on first
+    /// use.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 
-    let mut m_score = vec![vec![NEG; m + 1]; n + 1];
-    let mut came_from_contiguous = vec![vec![false; m + 1]; n + 1];
-    let mut d_score = vec![vec![NEG; m + 1]; n + 1];
-    let mut d_arg = vec![vec![0usize; m + 1]; n + 1];
+    /// Row stride (`m + 1`) the buffers are currently laid out with. Only
+    /// meaningful after [`Self::ensure_capacity`] has been called for the
+    /// matrix currently in use.
+    fn width(&self) -> usize {
+        self.hay_max
+    }
 
-    if let Some(row) = d_score.first_mut() {
-        row.fill(0);
+    /// Grows the flat buffers so a `(n + 1) x (m + 1)` matrix fits,
+    /// reusing the existing allocation (and skipping the resize entirely)
+    /// whenever it is already big enough.
+    fn ensure_capacity(&mut self, n: usize, m: usize) {
+        let rows = n + 1;
+        let cols = m + 1;
+        let needed = rows * cols;
+        if needed > self.m_score.len() {
+            self.m_score.resize(needed, NEG);
+            self.came_from_contiguous.resize(needed, false);
+            self.d_score.resize(needed, NEG);
+            self.d_arg.resize(needed, 0);
+        }
+        self.needle_max = rows;
+        self.hay_max = cols;
+    }
+}
+
+fn fill_score_tables(scratch: &mut MatchScratch) {
+    let n = scratch.needle_chars.len();
+    let m = scratch.hay_chars.len();
+
+    scratch.ensure_capacity(n, m);
+    let width = scratch.hay_max;
+
+    let needle_chars = &scratch.needle_chars;
+    let hay_chars = &scratch.hay_chars;
+    let boundary = &scratch.boundary;
+    let m_score = &mut scratch.m_score;
+    let came_from_contiguous = &mut scratch.came_from_contiguous;
+    let d_score = &mut scratch.d_score;
+    let d_arg = &mut scratch.d_arg;
+
+    // No bulk clearing of the matrix interior: the loop below writes every
+    // interior cell before any read can observe it (`m_score` is assigned
+    // `NEG` in the no-match branch, `d_score`/`d_arg` are written
+    // unconditionally by the carry-forward), so stale data left over from
+    // an earlier call on this scratch is never observable. Only the border
+    // needs resetting: row 0 and column 0 are *read* (as diagonal / left
+    // neighbours) but never *written* by the loop, and because the flat
+    // layout's row stride changes between calls of different haystack
+    // lengths, a position that is border in this call's layout may have
+    // been an interior (written) position in an earlier call's layout.
+    for j in 0..=m {
+        m_score[j] = NEG;
+        // Row 0 is never read by the loop below (needle[..0] is the empty
+        // prefix, and the i == 1 gap branch short-circuits before touching
+        // `d_score`), but the old per-call initialization defined it as 0
+        // ("aligning nothing costs nothing"), so keep that invariant.
+        d_score[j] = 0;
+    }
+    for i in 1..=n {
+        let col = i * width;
+        m_score[col] = NEG;
+        d_score[col] = NEG;
+        d_arg[col] = 0;
     }
 
     for i in 1..=n {
+        let needle_folded = needle_chars[i - 1].folded;
         for j in 1..=m {
-            if needle_chars[i - 1].folded == hay_chars[j - 1].folded {
+            let idx = i * width + j;
+            let idx_diag = (i - 1) * width + (j - 1);
+            let idx_left = idx - 1;
+
+            if needle_folded == hay_chars[j - 1].folded {
                 let bonus = if boundary[j - 1] {
                     WORD_BOUNDARY_BONUS
                 } else {
                     0
                 };
 
-                let contiguous_score = if m_score[i - 1][j - 1] > NEG {
+                let contiguous_score = if m_score[idx_diag] > NEG {
                     let prefix_bonus = if j == i { PREFIX_BONUS } else { 0 };
                     Some(
-                        m_score[i - 1][j - 1]
+                        m_score[idx_diag]
                             + BASE_MATCH_SCORE
                             + bonus
                             + CONTIGUOUS_BONUS
@@ -228,8 +457,8 @@ fn build_score_tables(
 
                 let gap_score = if i == 1 {
                     Some(BASE_MATCH_SCORE + bonus)
-                } else if d_score[i - 1][j - 1] > NEG {
-                    Some(d_score[i - 1][j - 1] + BASE_MATCH_SCORE + bonus)
+                } else if d_score[idx_diag] > NEG {
+                    Some(d_score[idx_diag] + BASE_MATCH_SCORE + bonus)
                 } else {
                     None
                 };
@@ -241,27 +470,26 @@ fn build_score_tables(
                     (None, None) => (NEG, false),
                 };
 
-                m_score[i][j] = best;
-                came_from_contiguous[i][j] = from_contiguous;
+                m_score[idx] = best;
+                came_from_contiguous[idx] = from_contiguous;
+            } else {
+                // No match here: `m_score` for this cell is "impossible",
+                // same value the old per-call `vec![vec![NEG; ..]; ..]`
+                // initialization gave it. Written in place instead of a
+                // bulk pre-clear so the buffer can be reused across calls.
+                m_score[idx] = NEG;
             }
 
             // Carry forward the best score for aligning needle[..i] within
             // haystack[..j], whether or not haystack char j participates.
-            if d_score[i][j - 1] >= m_score[i][j] {
-                d_score[i][j] = d_score[i][j - 1];
-                d_arg[i][j] = d_arg[i][j - 1];
+            if d_score[idx_left] >= m_score[idx] {
+                d_score[idx] = d_score[idx_left];
+                d_arg[idx] = d_arg[idx_left];
             } else {
-                d_score[i][j] = m_score[i][j];
-                d_arg[i][j] = j;
+                d_score[idx] = m_score[idx];
+                d_arg[idx] = j;
             }
         }
-    }
-
-    ScoreTables {
-        m_score,
-        came_from_contiguous,
-        d_score,
-        d_arg,
     }
 }
 
