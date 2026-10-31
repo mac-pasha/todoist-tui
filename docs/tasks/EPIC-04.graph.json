@@ -70,7 +70,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Use `PRAGMA user_version` as the version marker (no separate migrations table) and embed the DDL with `include_str!(\"schema.sql\")`. Column set must cover the queries specified in T-308 — read that task before choosing columns. EPIC-05 will add a `commands` table as migration 2, so the runner must be a list of versioned steps, not a single blob.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-304",
