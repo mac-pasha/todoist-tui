@@ -47,6 +47,9 @@ const APPLICATION: &str = "todoist-tui";
 const CONFIG_FILE_NAME: &str = "config.toml";
 /// File name of the log file inside the state directory (T-006).
 const LOG_FILE_NAME: &str = "todoist-tui.log";
+/// File name of the local SQLite cache database inside the state
+/// directory (T-302, EPIC-04).
+const CACHE_DB_FILE_NAME: &str = "cache.db";
 /// File name of the file-backed token fallback inside the config directory
 /// (T-104).
 const TOKEN_FILE_NAME: &str = "token";
@@ -105,6 +108,20 @@ pub fn state_dir() -> Result<PathBuf, ConfigError> {
 /// Same failure modes as [`state_dir`].
 pub fn log_file() -> Result<PathBuf, ConfigError> {
     Ok(state_dir()?.join(LOG_FILE_NAME))
+}
+
+/// Absolute path of the local SQLite cache database:
+/// `<state_dir>/cache.db`.
+///
+/// Used by [`crate::db::open`] (T-302) to locate the on-disk cache; the
+/// file itself is created with owner-only (`0600`) permissions by that
+/// module. This function only resolves the path.
+///
+/// # Errors
+///
+/// Same failure modes as [`state_dir`].
+pub fn cache_db_file() -> Result<PathBuf, ConfigError> {
+    Ok(state_dir()?.join(CACHE_DB_FILE_NAME))
 }
 
 /// Absolute path of the file-backed token fallback:
