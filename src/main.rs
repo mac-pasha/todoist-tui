@@ -30,6 +30,9 @@ mod db;
 /// Fuzzy matching core for task/filter search (T-902, EPIC-10).
 mod search;
 
+/// Sync engine scaffold and error vocabulary (T-501, EPIC-06).
+mod sync;
+
 use std::process::ExitCode;
 
 use config::Config;
@@ -366,6 +369,7 @@ mod bootstrap_tests {
                     && *l != "mod api;"
                     && *l != "mod db;"
                     && *l != "mod search;"
+                    && *l != "mod sync;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)
