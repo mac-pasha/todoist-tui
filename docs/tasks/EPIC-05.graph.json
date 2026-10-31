@@ -43,7 +43,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Follow the error conventions already set by `ApiError`/`AuthError` in `src/error.rs` (thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`). Never touch the `Secret`/`REDACTED` helper in `src/log.rs`. If `src/main.rs` has a bootstrap test that asserts the declared module list, update that assertion in the same task. No queue logic here - this task exists so the rest of the epic can land in parallel.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-403",
