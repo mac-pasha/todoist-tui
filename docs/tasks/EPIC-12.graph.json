@@ -188,7 +188,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all` pass"
       ],
       "context": "`Cargo.toml` already pins `reqwest` to rustls-only and `rusqlite` to `bundled` - this task proves those choices at the artifact level. Add a `LICENSE` file only if missing; the manifest already declares `license = \"MIT\"`. Metadata-only change, no src edits.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-1109",
