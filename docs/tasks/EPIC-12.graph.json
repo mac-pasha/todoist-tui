@@ -210,7 +210,7 @@
         "Permissions are least-privilege (`contents: write` only on the publish job) and no secrets other than the default `GITHUB_TOKEN` are referenced"
       ],
       "context": "New workflow file only; do not modify `ci.yml` here (T-1107 owns it). Homebrew/AUR recipes are listed as optional in the epic and are deliberately deferred - note that in the workflow header comment. Never commit tokens; rely on the default `GITHUB_TOKEN`.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1110",

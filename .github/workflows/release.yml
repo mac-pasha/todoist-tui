@@ -1,0 +1,134 @@
+# Release builds for todoist-tui (T-1109, EPIC-12).
+#
+# Triggers:
+#   - Tag push matching v*.*.* -> builds, publishes a GitHub Release and
+#     attaches the binary artifacts.
+#   - workflow_dispatch -> "dry run" mode: builds the same artifacts and
+#     uploads them as workflow artifacts for inspection, but never creates or
+#     modifies a GitHub Release and never pushes a tag.
+#
+# Release notes: this repo does not yet have a CHANGELOG.md (deferred to a
+# future task). Rather than widening this task's scope to add one, the
+# publish job falls back to GitHub's auto-generated release notes
+# (`generate_release_notes: true` in softprops/action-gh-release, equivalent
+# to `gh release create --generate-notes`). Once a CHANGELOG.md exists, this
+# job can be switched to extract the matching version section instead.
+#
+# Supply-chain / reproducibility: every build runs `cargo build --locked
+# --release` so CI fails if Cargo.lock would need to change. Builds are not
+# allowed to silently update the lockfile.
+#
+# Permissions: least privilege. The default top-level permissions are
+# read-only; only the publish job (which creates the GitHub Release) is
+# elevated to `contents: write`. No secrets other than the default
+# GITHUB_TOKEN are referenced anywhere in this workflow.
+name: release
+
+# Quoted so YAML 1.1 parsers (e.g. PyYAML) also read it as the key "on".
+"on":
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: todoist-tui
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui-release-${{ matrix.target }}
+
+      # --locked ensures Cargo.lock is treated as authoritative; the build
+      # fails outright if the lockfile would need to change.
+      - name: Build (--locked --release)
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            version="0.0.0-dryrun.${GITHUB_SHA::8}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Package artifact
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          version="${{ steps.version.outputs.version }}"
+          bin="${BIN_NAME}"
+          stage="$(mktemp -d)"
+          archive="${bin}-${version}-${target}.tar.gz"
+
+          cp "target/${target}/release/${bin}" "${stage}/${bin}"
+          tar -C "${stage}" -czf "${archive}" "${bin}"
+          shasum -a 256 "${archive}" > "${archive}.sha256"
+
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+          echo "checksum=${archive}.sha256" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
+          if-no-files-found: error
+
+  # Only runs for real tag pushes (never for workflow_dispatch dry runs), so
+  # a manual dry run can never create or modify a release.
+  publish:
+    name: publish release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # No CHANGELOG.md exists in this repo yet (deferred); fall back to
+      # GitHub's auto-generated release notes instead of extracting a
+      # matching CHANGELOG section. See the workflow header comment.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
