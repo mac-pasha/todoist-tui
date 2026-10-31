@@ -21,7 +21,7 @@
         "A short `Open questions` section captures anything that could not be confirmed from the Sync API docs (e.g. recurring-task completion offline), so EPIC-06 can pick it up"
       ],
       "context": "This is the spike called out in the EPIC-05 risks section. It is a docs-only task: no Rust changes. Derive the classes from the Sync API error documentation plus the existing `CommandError { error_code, error, extra }` type in `src/api/sync.rs`. T-408 encodes this matrix in code and must cite this file; keep the class names stable.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-402",
