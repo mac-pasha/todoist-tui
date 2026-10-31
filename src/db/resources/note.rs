@@ -7,22 +7,50 @@
 //!
 //! `schema.sql`'s `notes.item_id` is `NOT NULL`, but [`Note::item_id`] is
 //! `Option<Id>` because a note can instead be a project-level comment,
-//! carrying [`Note::project_id`] and no `item_id`. Rather than widening the
-//! schema (out of scope for this task — see `CLAUDE.md`'s "coordinate via
-//! `schema.sql`" rule), project-level notes are stored with an empty
-//! string in `item_id`: that sentinel satisfies the `NOT NULL` constraint
-//! and can never collide with a real Sync API item id (ids are always
-//! non-empty), so [`fetch_for_item`] only needs to special-case an empty
-//! `item_id` to keep project-level notes out of its results. Either way,
-//! the complete [`Note`] — including whichever of `item_id`/`project_id`
-//! was actually set — always rides along verbatim in `raw_json`, so the
-//! parent id is never lost.
+//! carrying [`Note::project_id`] and no `item_id`. Widening the schema to
+//! make `item_id` nullable (or to add a typed `project_id` column) is out
+//! of scope for this task — see `CLAUDE.md`'s "coordinate via `schema.sql`"
+//! rule and T-303, which owns the committed schema — so, as an interim
+//! measure pending a follow-up schema task, project-level notes are stored
+//! with [`PROJECT_LEVEL_SENTINEL`] (an empty string) in `item_id`. Every
+//! read site that must not treat the sentinel as a real id goes through
+//! that named constant rather than a bare `""` literal; see its doc
+//! comment for the exact invariant it relies on. The complete [`Note`] —
+//! including whichever of `item_id`/`project_id` was actually set — always
+//! rides along verbatim in `raw_json`, so the parent id is never lost.
+//!
+//! **Known limitation (deferred to a future schema task):** because
+//! `project_id` has no typed/indexed column of its own (it only exists
+//! inside `raw_json` for project-level notes), there is no `fetch_for_project`
+//! analogous to [`fetch_for_item`] that doesn't re-parse JSON for every row
+//! in the table. Per-item fetching (the acceptance criterion this task
+//! targets) is unaffected, but a project-level "notes per project" query
+//! should get its own indexed column in a later migration rather than
+//! scanning `raw_json`.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::Value;
 
 use crate::api::model::{Id, Note};
 use crate::error::{DbError, Result};
+
+/// Sentinel stored in `notes.item_id` for project-level notes (notes that
+/// carry [`Note::project_id`] instead of [`Note::item_id`]).
+///
+/// # Invariant this relies on
+///
+/// The Sync API never hands out an empty-string id for a real item, so an
+/// empty `item_id` can never collide with a real item id and unambiguously
+/// means "this note has no item parent" when read back. **Every** query
+/// against `notes.item_id` that must not treat this sentinel as a real id
+/// (e.g. a `GROUP BY`/`COUNT` over `item_id`, or any future
+/// `fetch_for_project`-style query) must filter it out explicitly — see
+/// [`fetch_for_item`] for the reference implementation. This is an
+/// interim workaround for `schema.sql`'s `notes.item_id NOT NULL`
+/// constraint, not a schema-enforced invariant; see the module doc for
+/// why it can't be fixed by making the column nullable within this task's
+/// scope.
+const PROJECT_LEVEL_SENTINEL: &str = "";
 
 /// Inserts `note`, or overwrites the existing row with the same id.
 ///
@@ -38,9 +66,12 @@ use crate::error::{DbError, Result};
 pub fn upsert(conn: &Connection, note: &Note) -> Result<()> {
     let raw_json = serde_json::to_string(note).map_err(|source| DbError::Decode { source })?;
 
-    // See the module doc for why project-level notes (no `item_id`) fall
-    // back to an empty-string sentinel rather than `NULL`.
-    let item_id = note.item_id.as_ref().map_or("", Id::as_str);
+    // See `PROJECT_LEVEL_SENTINEL`'s doc comment for why project-level
+    // notes (no `item_id`) fall back to that sentinel rather than `NULL`.
+    let item_id = note
+        .item_id
+        .as_ref()
+        .map_or(PROJECT_LEVEL_SENTINEL, Id::as_str);
 
     conn.execute(
         "INSERT INTO notes (id, item_id, content, posted_at, is_deleted, raw_json)
@@ -105,17 +136,19 @@ pub fn fetch(conn: &Connection, id: &str) -> Result<Option<Note>> {
 /// Fetches every note attached to item `item_id`, decoded from their
 /// stored `raw_json`, ordered by `posted_at` (oldest first).
 ///
-/// `item_id` is never an empty string for a real item, and project-level
-/// notes are stored with an empty-string sentinel (see the module doc), so
-/// an empty `item_id` short-circuits to an empty result rather than
-/// spuriously matching every project-level note in the table.
+/// Guards against `item_id == PROJECT_LEVEL_SENTINEL`: without this check,
+/// a caller accidentally passing an empty string (or a future caller that
+/// forgets this module's invariant) would otherwise match every
+/// project-level note in the table, since they all share that sentinel.
+/// See [`PROJECT_LEVEL_SENTINEL`]'s doc comment for the invariant this
+/// relies on.
 ///
 /// # Errors
 ///
 /// Returns [`DbError::Sqlite`] if the query fails, or [`DbError::Decode`]
 /// if a stored `raw_json` can no longer be deserialised into a [`Note`].
 pub fn fetch_for_item(conn: &Connection, item_id: &str) -> Result<Vec<Note>> {
-    if item_id.is_empty() {
+    if item_id == PROJECT_LEVEL_SENTINEL {
         return Ok(Vec::new());
     }
 
@@ -267,6 +300,22 @@ mod tests {
         assert_eq!(fetched.item_id, None);
 
         // Project-level notes must not show up in a per-item fetch.
-        assert_eq!(fetch_for_item(&conn, "").unwrap(), Vec::new());
+        assert_eq!(
+            fetch_for_item(&conn, PROJECT_LEVEL_SENTINEL).unwrap(),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn fetch_for_item_excludes_project_level_notes() {
+        let conn = test_conn();
+        let item_note = item_note("note-1", "item-1", "item-level note");
+        let project_note = project_note("note-2", "project-1", "project-level note");
+        upsert(&conn, &item_note).unwrap();
+        upsert(&conn, &project_note).unwrap();
+
+        let notes = fetch_for_item(&conn, "item-1").unwrap();
+
+        assert_eq!(notes, vec![item_note]);
     }
 }

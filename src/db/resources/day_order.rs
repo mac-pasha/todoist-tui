@@ -19,35 +19,40 @@ use crate::error::{DbError, Result};
 /// convention for the other single-row resource in `schema.sql`.
 const ROW_ID: &str = "me";
 
-/// Replaces the entire `day_orders` table contents with `day_orders` in a
-/// single transaction.
+/// Replaces the single `day_orders` row's contents with `day_orders`.
 ///
 /// `day_orders` is tolerant `serde_json::Map<String, Value>` (see
 /// [`crate::api::sync::SyncResponse::day_orders`]) so that heterogeneous
 /// value shapes the Sync API might send (plain integers today, objects in
 /// future) are stored and round-tripped without a code change here.
 ///
+/// This is a single `INSERT ... ON CONFLICT DO UPDATE` statement against
+/// the fixed `"me"` row (see [`ROW_ID`]), not a `DELETE` + `INSERT` pair,
+/// so it needs no transaction of its own to be atomic: there is exactly
+/// one logical row, and `rusqlite`'s implicit per-statement commit already
+/// makes the replace atomic. This function does **not** open its own
+/// transaction — like [`super::item::upsert`] and [`super::note::upsert`],
+/// it runs directly on the `&Connection` it is given, so callers that
+/// need this write to be atomic together with other resource writes (e.g.
+/// a future sync-apply task wrapping a whole batch) are free to wrap the
+/// call in their own outer transaction without hitting SQLite's rejection
+/// of nested `BEGIN`s.
+///
 /// # Errors
 ///
 /// Returns [`DbError::Decode`] if `day_orders` cannot be serialised to
-/// JSON, or [`DbError::Sqlite`] if the replace statement batch fails.
+/// JSON, or [`DbError::Sqlite`] if the statement fails.
 pub fn replace_all(conn: &Connection, day_orders: &Map<String, Value>) -> Result<()> {
     let raw_json =
         serde_json::to_string(day_orders).map_err(|source| DbError::Decode { source })?;
 
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|source| DbError::Sqlite { source })?;
-
-    tx.execute("DELETE FROM day_orders", [])
-        .map_err(|source| DbError::Sqlite { source })?;
-    tx.execute(
-        "INSERT INTO day_orders (id, raw_json) VALUES (?1, ?2)",
+    conn.execute(
+        "INSERT INTO day_orders (id, raw_json)
+         VALUES (?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET raw_json = excluded.raw_json",
         params![ROW_ID, raw_json],
     )
     .map_err(|source| DbError::Sqlite { source })?;
-
-    tx.commit().map_err(|source| DbError::Sqlite { source })?;
 
     Ok(())
 }

@@ -14,6 +14,8 @@
 
 // `pub` alone does not silence `dead_code` in a binary crate — same
 // pattern as `db::mod` and the other EPIC-04 module scaffolds.
+// TODO(T-307): remove this allow once T-307 wires these resources into
+// the sync-apply path and they start getting called from non-test code.
 #![allow(dead_code)]
 
 pub mod day_order;
