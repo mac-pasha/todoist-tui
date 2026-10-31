@@ -20,7 +20,7 @@
         "No real API token, account id or personal project/task content appears anywhere in the document"
       ],
       "context": "This is the open risk named in EPIC-09 ('server-side cascade semantics ... must be verified against the real API before finalising local optimistic behaviour'). It gates T-806. Follow the style of the existing manual notes in `docs/manual/epic-03-sync-api.md`. Use fake ids (`6X7...`-style placeholders) only; see hard rule 7 on fixture data.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-802",
