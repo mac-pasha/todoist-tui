@@ -46,7 +46,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "`src/auth/file_source.rs` already has the `OWNER_READ_WRITE = 0o600` create-then-chmod pattern and `#[cfg(unix)]` guards — reuse that shape rather than inventing a new one. `src/config/paths.rs` tests show the env-var-driven tempdir helper to use instead of adding a `tempfile` dev-dependency. No schema/DDL here.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-303",
