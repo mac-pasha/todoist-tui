@@ -93,7 +93,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Sync tokens are not secrets but are user-scoped: never log their value, only their presence. Keep this module free of resource-table knowledge so EPIC-06 scheduling can depend on it alone.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-305",
