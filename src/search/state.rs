@@ -265,7 +265,7 @@ mod tests {
     }
 
     fn ids(v: &[&str]) -> HashSet<String> {
-        v.iter().map(|s| s.to_string()).collect()
+        v.iter().map(ToString::to_string).collect()
     }
 
     fn open<'a>(items: &'a [SearchItem], view: &[&str]) -> SearchSession<'a> {
@@ -410,7 +410,7 @@ mod tests {
         let items = pies();
         let mut s = open(&items, &["t1", "t2", "t3"]);
         type_str(&mut s, "zzzz");
-        assert!(s.results().is_empty());
+        assert_eq!(s.results(), []);
         assert_eq!(s.highlighted_index(), None);
         assert!(s.accept().is_none());
     }
@@ -429,7 +429,7 @@ mod tests {
         s.push_char('b');
         assert_eq!(result_ids(&s), vec!["t4"]);
         s.push_char('z');
-        assert!(s.results().is_empty());
+        assert_eq!(s.results(), []);
         s.pop_char();
         assert_eq!(result_ids(&s), vec!["t4"]);
         s.pop_char();
@@ -506,7 +506,7 @@ mod tests {
         // "apple t" matches only "apple tart" (cake/pie lack a 't' after space).
         type_str(&mut s, " ta");
         let n = s.results().len();
-        assert!(n >= 1 && n < 3, "expected shrink, got {n}");
+        assert!((1..3).contains(&n), "expected shrink, got {n}");
         assert_eq!(s.highlighted_index(), Some(n - 1));
     }
 
@@ -521,14 +521,14 @@ mod tests {
             s.push_char(c);
             match s.highlighted_index() {
                 Some(i) => assert!(i < s.results().len()),
-                None => assert!(s.results().is_empty()),
+                None => assert_eq!(s.results(), []),
             }
         }
         while !s.query().is_empty() {
             s.pop_char();
             match s.highlighted_index() {
                 Some(i) => assert!(i < s.results().len()),
-                None => assert!(s.results().is_empty()),
+                None => assert_eq!(s.results(), []),
             }
         }
     }
@@ -582,7 +582,7 @@ mod tests {
         assert_eq!(s.scope(), SessionScope::All);
         assert_eq!(s.query(), "apple");
         let mut all = result_ids(&s);
-        all.sort();
+        all.sort_unstable();
         assert_eq!(all, vec!["t1", "t2", "t3"]);
 
         s.set_scope(SessionScope::CurrentView);
@@ -637,7 +637,7 @@ mod tests {
         let items = pies();
         let mut s = open(&items, &[]);
         type_str(&mut s, "apple");
-        assert!(s.results().is_empty());
+        assert_eq!(s.results(), []);
         assert!(s.accept().is_none());
     }
 
