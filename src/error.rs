@@ -59,6 +59,11 @@ pub enum AppError {
     /// The offline command queue (persist/replay, EPIC-05) failed.
     #[error("queue: {0}")]
     Queue(#[from] QueueError),
+
+    /// The sync engine (sync-token bookkeeping, queue draining,
+    /// reconciliation with the local store, EPIC-06) failed.
+    #[error("sync: {0}")]
+    Sync(#[from] SyncError),
 }
 
 /// Errors raised while loading the TOML config file.
@@ -402,6 +407,68 @@ impl QueueError {
     }
 }
 
+/// Errors raised by the sync engine (sync-token bookkeeping, queue
+/// draining, reconciliation with the local store, EPIC-06).
+///
+/// No variant here may carry raw secret material: messages are
+/// human-readable diagnostics, never token bytes.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum SyncError {
+    /// A call to the Todoist API during sync failed.
+    #[error("sync API call failed: {source}")]
+    Api {
+        /// Underlying API error.
+        #[source]
+        source: ApiError,
+    },
+
+    /// The local store could not be read from or written to during sync.
+    #[error("sync store operation failed: {message}")]
+    Store {
+        /// Human-readable diagnostic; never raw row/secret data.
+        message: String,
+    },
+
+    /// The local write queue could not be read from or written to during
+    /// sync.
+    #[error("sync queue operation failed: {message}")]
+    Queue {
+        /// Human-readable diagnostic; never raw row/secret data.
+        message: String,
+    },
+
+    /// No network connectivity is available; sync was not attempted.
+    #[error("sync skipped: offline")]
+    Offline,
+
+    /// An internal channel used to coordinate sync work was closed
+    /// unexpectedly (e.g. the receiving task panicked or shut down).
+    #[error("sync channel closed unexpectedly")]
+    ChannelClosed,
+
+    /// The sync operation was cancelled before it could complete (e.g. the
+    /// user quit the app or a shutdown was requested).
+    #[error("sync cancelled")]
+    Cancelled,
+}
+
+impl SyncError {
+    /// Whether this failure indicates the client is offline / cannot reach
+    /// the Todoist API: true for `Offline` and for `Api { source }` where
+    /// the underlying [`ApiError`] is a transport-level failure (DNS, TLS,
+    /// timeout, connection refused, ...), false otherwise.
+    pub fn is_offline(&self) -> bool {
+        matches!(self, SyncError::Offline)
+            || matches!(
+                self,
+                SyncError::Api {
+                    source: ApiError::Transport { .. }
+                }
+            )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +613,38 @@ mod tests {
         ]
     }
 
+    /// A `reqwest::Error` built fully offline (no socket is opened): a
+    /// relative URL makes `RequestBuilder::build` fail with `Kind::Builder`.
+    /// Stands in for the opaque transport source `ApiError::Transport` wraps.
+    fn reqwest_stub_error() -> reqwest::Error {
+        reqwest::Client::new()
+            .get("::not a url")
+            .build()
+            .expect_err("a relative URL must fail to build")
+    }
+
+    fn sample_sync_errors() -> Vec<SyncError> {
+        vec![
+            SyncError::Api {
+                source: ApiError::Unauthorized,
+            },
+            SyncError::Api {
+                source: ApiError::Transport {
+                    source: reqwest_stub_error(),
+                },
+            },
+            SyncError::Store {
+                message: "failed to persist task row".to_string(),
+            },
+            SyncError::Queue {
+                message: "failed to dequeue pending command".to_string(),
+            },
+            SyncError::Offline,
+            SyncError::ChannelClosed,
+            SyncError::Cancelled,
+        ]
+    }
+
     #[test]
     fn queue_error_variants_never_leak_fixture_secrets() {
         for err in sample_queue_errors() {
@@ -566,6 +665,22 @@ mod tests {
             assert!(
                 !debug.contains(FIXTURE_ARG_MARKER),
                 "Debug leaked fixture arg payload marker: {debug}"
+            );
+        }
+    }
+
+    #[test]
+    fn sync_error_variants_never_leak_the_fixture_token() {
+        for err in sample_sync_errors() {
+            let display = format!("{err}");
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(FIXTURE_TOKEN),
+                "Display leaked fixture token: {display}"
+            );
+            assert!(
+                !debug.contains(FIXTURE_TOKEN),
+                "Debug leaked fixture token: {debug}"
             );
         }
     }
@@ -659,9 +774,70 @@ mod tests {
     }
 
     #[test]
+    fn app_error_sync_has_sync_prefix_and_from_conversion() {
+        let app: AppError = SyncError::Offline.into();
+        assert!(matches!(app, AppError::Sync(_)));
+        let shown = app.to_string();
+        assert!(shown.starts_with("sync: "), "got {shown}");
+        assert!(shown.contains("offline"), "got {shown}");
+    }
+
+    #[test]
+    fn app_error_sync_prefix_holds_for_every_variant_without_token() {
+        for err in sample_sync_errors() {
+            let inner = err.to_string();
+            let app = AppError::from(err);
+            assert_eq!(app.to_string(), format!("sync: {inner}"));
+            assert!(!app.to_string().contains(FIXTURE_TOKEN));
+            assert!(!format!("{app:?}").contains(FIXTURE_TOKEN));
+        }
+    }
+
+    #[test]
     fn queue_full_handles_u64_max() {
         let err = QueueError::QueueFull { pending: u64::MAX };
         assert!(err.to_string().contains("18446744073709551615"));
         assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn sync_error_is_offline_matches_offline_and_api_transport_only() {
+        assert!(SyncError::Offline.is_offline());
+        assert!(SyncError::Api {
+            source: ApiError::Transport {
+                source: reqwest_stub_error(),
+            },
+        }
+        .is_offline());
+
+        assert!(!SyncError::Api {
+            source: ApiError::Unauthorized,
+        }
+        .is_offline());
+        assert!(!SyncError::Store {
+            message: "x".to_string()
+        }
+        .is_offline());
+        assert!(!SyncError::Queue {
+            message: "x".to_string()
+        }
+        .is_offline());
+        assert!(!SyncError::ChannelClosed.is_offline());
+        assert!(!SyncError::Cancelled.is_offline());
+    }
+
+    #[test]
+    fn sync_error_source_chain_exposes_underlying_error() {
+        use std::error::Error as _;
+        for err in sample_sync_errors() {
+            match err {
+                SyncError::Api { .. } => assert!(err.source().is_some()),
+                SyncError::Store { .. }
+                | SyncError::Queue { .. }
+                | SyncError::Offline
+                | SyncError::ChannelClosed
+                | SyncError::Cancelled => assert!(err.source().is_none()),
+            }
+        }
     }
 }
