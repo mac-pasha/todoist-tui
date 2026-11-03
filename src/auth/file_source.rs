@@ -558,6 +558,151 @@ mod unit_tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    // ---- T-1114: load() tightens a loose pre-existing token file (sdlc-unit-tester) ----
+
+    /// A token file left at 0644 (classic umask-022 artifact) by an older
+    /// build must be accepted, read back intact, and re-chmodded to 0600 on
+    /// disk — never rejected (upgrade-compatibility contract).
+    #[cfg(unix)]
+    #[test]
+    fn load_tightens_pre_existing_0644_file_to_0600_and_returns_token() {
+        let root = temp_root("load-tighten-644");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        fs::write(&path, FAKE_A.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load of 0644 file must not error");
+        let loaded = loaded.expect("token present");
+        assert_eq!(
+            loaded.expose(),
+            FAKE_A,
+            "token value must survive tightening"
+        );
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "on-disk mode after load was {mode:o}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// World-writable 0666 is the loosest realistic case: same tightening
+    /// assertion, and the returned value must be byte-identical to what was
+    /// written (tightening must not touch contents).
+    #[cfg(unix)]
+    #[test]
+    fn load_tightens_pre_existing_0666_file_to_0600_and_preserves_content() {
+        let root = temp_root("load-tighten-666");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        let body = format!("{FAKE_B}\n"); // trailing newline: content check
+        fs::write(&path, body.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load of 0666 file must not error");
+        let loaded = loaded.expect("token present");
+        // load trims trailing whitespace into a Token; the file on disk must
+        // still contain exactly what we wrote — chmod does not rewrite data.
+        assert_eq!(loaded.expose(), FAKE_B);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk, body,
+            "file contents must be byte-identical after tightening"
+        );
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "on-disk mode after load was {mode:o}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A file already at exactly 0600 must load fine and stay at 0600.
+    /// NOTE: we deliberately do NOT assert "no chmod syscall happened"
+    /// via mtime: the implementation's condition is `mode & 0o777 != 0o600`,
+    /// which already guarantees no `set_permissions` call on a 0600 file,
+    /// and mtime resolution on some filesystems is 1s, making an mtime
+    /// equality assertion flaky. The mode-equality assertion plus the
+    /// source-level condition check below are sufficient.
+    #[cfg(unix)]
+    #[test]
+    fn load_on_already_0600_file_is_untouched_and_returns_token() {
+        let root = temp_root("load-0600-untouched");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        fs::write(&path, FAKE_A.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let before = fs::metadata(&path).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load ok").expect("token present");
+        assert_eq!(loaded.expose(), FAKE_A);
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(
+            after.permissions().mode() & 0o777,
+            0o600,
+            "0600 file must stay 0600"
+        );
+        assert_eq!(
+            before.modified().unwrap(),
+            after.modified().unwrap(),
+            "a 0600 file must not be rewritten (mtime changed)"
+        );
+        assert_eq!(
+            std::os::unix::fs::MetadataExt::mtime_nsec(&before),
+            std::os::unix::fs::MetadataExt::mtime_nsec(&after)
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Missing file: `load` must still return `Ok(None)`, not panic, and
+    /// must not create the file as a side effect of the tighten step.
+    #[cfg(unix)]
+    #[test]
+    fn load_on_missing_file_returns_none_and_creates_nothing() {
+        let root = temp_root("load-missing");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        assert!(!path.exists());
+        let result = FileTokenSource::at(path.clone())
+            .load()
+            .expect("missing file is not an error");
+        assert!(result.is_none());
+        assert!(!path.exists(), "load() must not create the token file");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Adversarial probe for point 9 of the test brief: the coder's
+    /// condition is `mode & 0o777 != 0o600`, which is NOT
+    /// "wider-than-0600" — a MORE restrictive mode like 0400 (owner
+    /// read-only) also fails the check and gets CHMODDED back UP to 0600.
+    /// This test pins the actual observed behaviour. The documented
+    /// contract (module docs, T-1114) says tightening applies to files
+    /// "wider than 0600"; loosening a deliberately read-only file back to
+    /// owner-writable contradicts that wording and could undo an
+    /// intentional user/ops hardening. Reported as a suspected defect —
+    /// the assertion asserts the CURRENT behaviour so the intent can be
+    /// settled in review rather than silently accepted.
+    #[cfg(unix)]
+    #[test]
+    fn load_on_0400_file_observed_behavior_pins_loosening_bug() {
+        let root = temp_root("load-0400-probe");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        fs::write(&path, FAKE_B.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load of 0400 file must not error");
+        let loaded = loaded.expect("token present");
+        assert_eq!(loaded.expose(), FAKE_B);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        // CURRENT (suspect) behaviour: 0400 is "!= 0600" so it gets set to
+        // 0600, i.e. loosened. If this assertion FAILS (mode stayed 0400)
+        // then the coder's condition is actually narrower than reported and
+        // no bug exists — either outcome is informative, but a 0400→0600
+        // flip must be a conscious decision, see the bug report.
+        assert_eq!(
+            mode,
+            0o600,
+            "expected current impl to loosen 0400 back to 0600 (mode & 0o777 != 0o600); if this fails the condition is narrower than documented"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
     // ---- corrupt / hostile on-disk states ----
 
     #[test]

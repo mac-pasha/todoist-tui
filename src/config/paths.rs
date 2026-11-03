@@ -640,6 +640,133 @@ mod unit_tests {
         assert!(tok.ends_with(".config/todoist-tui/token"), "got {tok:?}");
     }
 
+    // ---- T-1114: 0700 permission enforcement (sdlc-unit-tester) ----
+
+    #[cfg(unix)]
+    fn dir_mode_bits(path: &Path) -> u32 {
+        fs::metadata(path)
+            .expect("metadata for dir-mode assertion")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[cfg(unix)]
+    fn assert_mode_0700(path: &Path, label: &str) {
+        let mode = dir_mode_bits(path);
+        assert_eq!(mode, 0o700, "{label} must be exactly 0700, got {mode:o}");
+    }
+
+    /// A freshly created (previously non-existent) config dir must come back
+    /// at exactly 0700, not 0700 & !umask.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_config_dir_fresh_dir_is_exactly_0700() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("cfg-t1114-fresh");
+        env::set_var("XDG_CONFIG_HOME", &tmp);
+        let dir = ensure_config_dir().expect("create");
+        assert_mode_0700(&dir, "fresh config dir");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Same, for the state dir.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_state_dir_fresh_dir_is_exactly_0700() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("state-t1114-fresh");
+        env::set_var("XDG_STATE_HOME", &tmp);
+        let dir = ensure_state_dir().expect("create");
+        assert_mode_0700(&dir, "fresh state dir");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A directory that already exists with a wider mode (0755 and 0777)
+    /// must be re-tightened to 0700 by `ensure_config_dir`.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_config_dir_re_tightens_pre_existing_wider_modes() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("cfg-t1114-retighten");
+        for wide in [0o755, 0o777] {
+            let base = tmp.join(format!("b{wide:o}"));
+            fs::create_dir_all(&base).expect("create base");
+            fs::set_permissions(&base, fs::Permissions::from_mode(wide)).expect("widen");
+            env::set_var("XDG_CONFIG_HOME", &base);
+            let dir = ensure_config_dir().expect("ensure");
+            assert_mode_0700(&dir, "pre-existing wider config dir");
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Calling `ensure_state_dir` twice in a row must leave 0700 both times
+    /// (idempotent re-tightening, no error on the second call).
+    #[cfg(unix)]
+    #[test]
+    fn ensure_state_dir_twice_is_idempotent_at_0700() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("state-t1114-idem");
+        env::set_var("XDG_STATE_HOME", &tmp);
+        let a = ensure_state_dir().expect("first call");
+        assert_mode_0700(&a, "first call");
+        let b = ensure_state_dir().expect("second call");
+        assert_eq!(a, b);
+        assert_mode_0700(&b, "second call");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// When only the leaf `todoist-tui` component is missing, the function
+    /// must tighten the leaf to 0700 but must NOT touch the already-existing
+    /// grandparent (pre-created here at 0755).
+    #[cfg(unix)]
+    #[test]
+    fn ensure_config_dir_touches_leaf_but_not_pre_existing_grandparent() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("cfg-t1114-ancestor");
+        let grandparent = tmp.join("cfg");
+        fs::create_dir_all(&grandparent).expect("create grandparent");
+        fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o755)).expect("widen");
+        let base = grandparent.join("base"); // missing intermediate
+        env::set_var("XDG_CONFIG_HOME", &base);
+        let dir = ensure_config_dir().expect("ensure");
+        // Leaf and the intermediate the call itself created are 0700...
+        assert_mode_0700(&dir, "leaf (base/todoist-tui)");
+        assert_mode_0700(&base, "intermediate created by this call");
+        // ...but the pre-existing grandparent keeps its original 0755.
+        assert_eq!(
+            dir_mode_bits(&grandparent),
+            0o755,
+            "pre-existing grandparent must be left untouched"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Same ancestor-non-interference check, but with TWO missing components
+    /// below the pre-existing grandparent: both created components must be
+    /// 0700, the grandparent still 0755.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_state_dir_created_chain_all_0700_pre_existing_ancestor_unmodified() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("state-t1114-chain");
+        let grandparent = tmp.join("st");
+        fs::create_dir_all(&grandparent).expect("create grandparent");
+        fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o755)).expect("widen");
+        let base = grandparent.join("l1").join("l2");
+        env::set_var("XDG_STATE_HOME", &base);
+        let dir = ensure_state_dir().expect("ensure");
+        assert_mode_0700(&dir, "leaf");
+        assert_mode_0700(&base, "created component 2 (l1/l2)");
+        assert_mode_0700(&grandparent.join("l1"), "created component 1");
+        assert_eq!(
+            dir_mode_bits(&grandparent),
+            0o755,
+            "pre-existing grandparent must be left untouched"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
     #[test]
     fn ensure_config_dir_errors_with_io_when_base_is_a_file() {
         let _g = EnvGuard::new();
