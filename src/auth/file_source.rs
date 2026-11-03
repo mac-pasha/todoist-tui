@@ -94,10 +94,23 @@ impl FileTokenSource {
         }
     }
 
-    /// If the token file exists and its mode is wider than `0600`,
-    /// tightens it to `0600` in place. A missing file (not yet created,
-    /// or removed) is not an error here: [`FileTokenSource::load`] handles
-    /// `NotFound` itself on the read that follows.
+    /// If the token file exists and its mode grants any permission bit
+    /// beyond owner-read-write (`0600`) — e.g. group/other read, write or
+    /// execute, or an owner-execute bit — tightens it to `0600` in place.
+    ///
+    /// Crucially this is a one-directional ratchet: a mode that is already
+    /// equal to or *more* restrictive than `0600` (e.g. `0400`, `0440`,
+    /// `0000`) is a strict subset of `0600`'s bits and is left untouched.
+    /// We never loosen a deliberately hardened file back up to `0600` —
+    /// doing so would silently undo an intentional owner/ops decision to
+    /// make the token file read-only or otherwise more restrictive. The
+    /// check is therefore `mode & 0o777 & !0o600 != 0` ("are there bits
+    /// set outside owner-rw?"), not `mode & 0o777 != 0o600` ("is it not
+    /// exactly 0600?").
+    ///
+    /// A missing file (not yet created, or removed) is not an error here:
+    /// [`FileTokenSource::load`] handles `NotFound` itself on the read
+    /// that follows.
     #[cfg(unix)]
     fn tighten_if_loose(&self) -> Result<()> {
         let metadata = match fs::metadata(&self.path) {
@@ -106,7 +119,7 @@ impl FileTokenSource {
             Err(err) => return Err(self.io_err(err).into()),
         };
 
-        if metadata.permissions().mode() & 0o777 != OWNER_READ_WRITE {
+        if metadata.permissions().mode() & 0o777 & !OWNER_READ_WRITE != 0 {
             fs::set_permissions(&self.path, fs::Permissions::from_mode(OWNER_READ_WRITE))
                 .map_err(|source| self.io_err(source))?;
         }
@@ -666,17 +679,16 @@ mod unit_tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// Adversarial probe for point 9 of the test brief: the coder's
-    /// condition is `mode & 0o777 != 0o600`, which is NOT
-    /// "wider-than-0600" — a MORE restrictive mode like 0400 (owner
-    /// read-only) also fails the check and gets CHMODDED back UP to 0600.
-    /// This test pins the actual observed behaviour. The documented
-    /// contract (module docs, T-1114) says tightening applies to files
-    /// "wider than 0600"; loosening a deliberately read-only file back to
-    /// owner-writable contradicts that wording and could undo an
-    /// intentional user/ops hardening. Reported as a suspected defect —
-    /// the assertion asserts the CURRENT behaviour so the intent can be
-    /// settled in review rather than silently accepted.
+    /// Adversarial probe for point 9 of the test brief, now updated after
+    /// the T-1114 bug fix: the coder's original condition was
+    /// `mode & 0o777 != 0o600`, which was NOT "wider-than-0600" — a MORE
+    /// restrictive mode like 0400 (owner read-only) also failed that check
+    /// and got CHMODDED back UP to 0600. This test used to pin that
+    /// observed (buggy) behaviour. `tighten_if_loose` now uses a
+    /// one-directional ratchet (`mode & 0o777 & !0o600 != 0`), so a 0400
+    /// file is correctly left untouched by `load()`. The assertion below
+    /// has been flipped to match the corrected, documented contract:
+    /// tightening never loosens a file that is already at or below `0600`.
     #[cfg(unix)]
     #[test]
     fn load_on_0400_file_observed_behavior_pins_loosening_bug() {
@@ -690,15 +702,12 @@ mod unit_tests {
         let loaded = loaded.expect("token present");
         assert_eq!(loaded.expose(), FAKE_B);
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        // CURRENT (suspect) behaviour: 0400 is "!= 0600" so it gets set to
-        // 0600, i.e. loosened. If this assertion FAILS (mode stayed 0400)
-        // then the coder's condition is actually narrower than reported and
-        // no bug exists — either outcome is informative, but a 0400→0600
-        // flip must be a conscious decision, see the bug report.
+        // FIXED behaviour: 0400 is a strict subset of 0600's bits, so it is
+        // left untouched by `tighten_if_loose` — no loosening occurs.
         assert_eq!(
             mode,
-            0o600,
-            "expected current impl to loosen 0400 back to 0600 (mode & 0o777 != 0o600); if this fails the condition is narrower than documented"
+            0o400,
+            "expected 0400 token file to stay at 0400 after load(); tighten_if_loose must never loosen a mode that is already a subset of 0600"
         );
         let _ = fs::remove_dir_all(&root);
     }
