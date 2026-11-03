@@ -36,6 +36,9 @@ mod queue;
 /// Sync engine scaffold and error vocabulary (T-501, EPIC-06).
 mod sync;
 
+/// Terminal UI scaffold and error vocabulary (T-601, EPIC-07).
+mod ui;
+
 use std::process::ExitCode;
 
 use config::Config;
@@ -362,7 +365,8 @@ mod bootstrap_tests {
             // T-006 requires `mod log;`, T-007 requires `mod cli;`, T-101
             // requires `mod auth;`, T-201 requires `mod api;`, T-301
             // requires `mod db;`, T-902 requires `mod search;`, T-402
-            // requires `mod queue;`. The only other permitted lines are the
+            // requires `mod queue;`, T-501 requires `mod sync;`, T-601
+            // requires `mod ui;`. The only other permitted lines are the
             // cfg(test) modules below.
             .filter(|l| {
                 *l != "mod error;"
@@ -375,6 +379,7 @@ mod bootstrap_tests {
                     && *l != "mod search;"
                     && *l != "mod queue;"
                     && *l != "mod sync;"
+                    && *l != "mod ui;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)

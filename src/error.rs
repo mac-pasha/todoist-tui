@@ -64,6 +64,10 @@ pub enum AppError {
     /// reconciliation with the local store, EPIC-06) failed.
     #[error("sync: {0}")]
     Sync(#[from] SyncError),
+
+    /// The terminal UI (render loop, input handling, EPIC-07) failed.
+    #[error("ui: {0}")]
+    Ui(#[from] UiError),
 }
 
 /// Errors raised while loading the TOML config file.
@@ -469,6 +473,63 @@ impl SyncError {
     }
 }
 
+/// Errors raised by the terminal UI (render loop, input handling, EPIC-07).
+///
+/// No variant here may carry raw secret material: only opaque terminal/IO
+/// source errors, terminal dimensions, and keymap messages.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum UiError {
+    /// The terminal could not be put into the raw/alternate-screen state
+    /// required to draw the UI.
+    #[error("failed to initialise the terminal: {source}")]
+    TerminalInit {
+        /// Underlying OS/terminal error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// The terminal could not be restored to its original state on exit.
+    #[error("failed to restore the terminal: {source}")]
+    TerminalRestore {
+        /// Underlying OS/terminal error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// A render pass (drawing a frame) failed.
+    #[error("failed to draw the UI: {source}")]
+    Draw {
+        /// Underlying OS/terminal error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// Reading an input event (key, mouse, resize) from the terminal failed.
+    #[error("failed to read input: {source}")]
+    Input {
+        /// Underlying OS/terminal error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// The terminal is smaller than the UI's minimum supported size.
+    #[error("terminal is too small: {cols}x{rows}")]
+    TerminalTooSmall {
+        /// Terminal width in columns.
+        cols: u16,
+        /// Terminal height in rows.
+        rows: u16,
+    },
+
+    /// A keybinding could not be resolved or applied.
+    #[error("keymap error: {message}")]
+    Keymap {
+        /// Human-readable description; never carries secret material.
+        message: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +706,27 @@ mod tests {
         ]
     }
 
+    fn sample_ui_errors() -> Vec<UiError> {
+        vec![
+            UiError::TerminalInit {
+                source: io::Error::other("raw mode failed"),
+            },
+            UiError::TerminalRestore {
+                source: io::Error::other("leave alt screen failed"),
+            },
+            UiError::Draw {
+                source: io::Error::other("draw failed"),
+            },
+            UiError::Input {
+                source: io::Error::other("poll failed"),
+            },
+            UiError::TerminalTooSmall { cols: 10, rows: 3 },
+            UiError::Keymap {
+                message: "unbound key q in normal mode".to_string(),
+            },
+        ]
+    }
+
     #[test]
     fn queue_error_variants_never_leak_fixture_secrets() {
         for err in sample_queue_errors() {
@@ -672,6 +754,22 @@ mod tests {
     #[test]
     fn sync_error_variants_never_leak_the_fixture_token() {
         for err in sample_sync_errors() {
+            let display = format!("{err}");
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(FIXTURE_TOKEN),
+                "Display leaked fixture token: {display}"
+            );
+            assert!(
+                !debug.contains(FIXTURE_TOKEN),
+                "Debug leaked fixture token: {debug}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_error_variants_never_leak_the_fixture_token() {
+        for err in sample_ui_errors() {
             let display = format!("{err}");
             let debug = format!("{err:?}");
             assert!(
@@ -794,6 +892,26 @@ mod tests {
     }
 
     #[test]
+    fn app_error_ui_has_ui_prefix_and_from_conversion() {
+        let app: AppError = UiError::TerminalTooSmall { cols: 10, rows: 3 }.into();
+        assert!(matches!(app, AppError::Ui(_)));
+        let shown = app.to_string();
+        assert!(shown.starts_with("ui: "), "got {shown}");
+        assert!(shown.contains("10x3"), "got {shown}");
+    }
+
+    #[test]
+    fn app_error_ui_prefix_holds_for_every_variant_without_token() {
+        for err in sample_ui_errors() {
+            let inner = err.to_string();
+            let app = AppError::from(err);
+            assert_eq!(app.to_string(), format!("ui: {inner}"));
+            assert!(!app.to_string().contains(FIXTURE_TOKEN));
+            assert!(!format!("{app:?}").contains(FIXTURE_TOKEN));
+        }
+    }
+
+    #[test]
     fn queue_full_handles_u64_max() {
         let err = QueueError::QueueFull { pending: u64::MAX };
         assert!(err.to_string().contains("18446744073709551615"));
@@ -837,6 +955,20 @@ mod tests {
                 | SyncError::Offline
                 | SyncError::ChannelClosed
                 | SyncError::Cancelled => assert!(err.source().is_none()),
+            }
+        }
+    }
+
+    #[test]
+    fn ui_error_source_chain_exposes_underlying_error() {
+        use std::error::Error as _;
+        let errs = sample_ui_errors();
+        for err in &errs {
+            match err {
+                UiError::TerminalTooSmall { .. } | UiError::Keymap { .. } => {
+                    assert!(err.source().is_none());
+                }
+                _ => assert!(err.source().is_some(), "missing source for {err:?}"),
             }
         }
     }
