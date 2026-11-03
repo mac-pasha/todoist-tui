@@ -68,7 +68,7 @@
         "`src/main.rs` declares `mod filters;`; `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Parsing only - no evaluation and no cache access here, so this is unblocked by EPIC-04. Keep the parser hand-written (no new parser dependency). Follow the `thiserror` style used in `src/error.rs` for `Unsupported`; do not add a new variant to `AppError` unless the parser is actually called from a fallible app path (it is not yet).",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-904",
