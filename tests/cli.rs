@@ -108,7 +108,10 @@ fn stubs_without_extra_args_report_not_implemented_exit_1() {
         vec!["today", "--json"],
     ] {
         let o = run("stub-guarded", &args);
-        assert_eq!(o.status.code(), Some(1), "args {args:?}: {}", stderr(&o));
+        // T-1001: the auth guard's exit code is now its own dedicated
+        // code (3), distinct from the generic failure code (1) that the
+        // unguarded `tui`/`NotImplemented` path below still uses.
+        assert_eq!(o.status.code(), Some(3), "args {args:?}: {}", stderr(&o));
         let err = stderr(&o);
         assert!(
             err.contains("not authenticated") && err.contains("run `todoist-tui auth`"),
@@ -154,7 +157,8 @@ fn add_accepts_dash_prefixed_text_after_double_dash() {
     // T-109: with no token stored, `add` now fails at the auth guard before
     // reaching its (still-unimplemented) body.
     let o = run("add-dash", &["add", "--", "-weird text"]);
-    assert_eq!(o.status.code(), Some(1));
+    // T-1001: dedicated not-authenticated exit code (3).
+    assert_eq!(o.status.code(), Some(3));
     assert!(stderr(&o).contains("not authenticated"));
 }
 
@@ -163,7 +167,8 @@ fn add_accepts_empty_text_without_parsing_it() {
     // T-109: with no token stored, `add` now fails at the auth guard before
     // reaching its (still-unimplemented) body.
     let o = run("add-empty", &["add", ""]);
-    assert_eq!(o.status.code(), Some(1));
+    // T-1001: dedicated not-authenticated exit code (3).
+    assert_eq!(o.status.code(), Some(3));
     assert!(stderr(&o).contains("not authenticated"));
 }
 
@@ -198,7 +203,8 @@ fn config_flag_is_global_and_accepts_missing_file() {
     let m = missing.to_str().unwrap();
     for args in [vec!["--config", m, "sync"], vec!["sync", "--config", m]] {
         let o = run("cfg-missing", &args);
-        assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+        // T-1001: dedicated not-authenticated exit code (3).
+        assert_eq!(o.status.code(), Some(3), "{}", stderr(&o));
         assert!(stderr(&o).contains("not authenticated"), "{}", stderr(&o));
     }
 }

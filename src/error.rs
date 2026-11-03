@@ -40,7 +40,8 @@ pub enum AppError {
     Log(#[from] LogError),
 
     /// A CLI subcommand is stubbed out; carries the subcommand name
-    /// (T-007 maps this to a stderr message and exit code 1).
+    /// (T-007 maps this to a stderr message; T-1001's `exit_code` maps it
+    /// to the generic failure code).
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
 
@@ -68,6 +69,52 @@ pub enum AppError {
     /// The terminal UI (render loop, input handling, EPIC-07) failed.
     #[error("ui: {0}")]
     Ui(#[from] UiError),
+
+    /// A one-shot CLI command (non-interactive output / exit-code mapping,
+    /// T-1001, EPIC-11) failed.
+    #[error("cli: {0}")]
+    Cli(#[from] CliError),
+}
+
+/// Maps an [`AppError`] to a process exit code for `main`'s one-shot CLI
+/// commands (T-1001, EPIC-11).
+///
+/// `0` (success) is never returned here: every branch of `AppError` is a
+/// failure, so `main` only calls this function on its `Err` path and keeps
+/// `0` reserved for `Ok`. Authentication failures
+/// ([`AuthError::NotAuthenticated`], [`CliError::NotAuthenticated`]) map to
+/// one dedicated code, distinct from the generic fallback; offline/transport
+/// failures ([`CliError::Offline`], [`ApiError::Transport`]) map to a third,
+/// also-distinct dedicated code; every other failure falls back to the
+/// generic code. Clap itself exits the process with its own usage-error code
+/// (2) before argument parsing ever reaches `main`'s error path, so this
+/// function never needs to (and must not) reproduce code 2.
+///
+/// `GENERIC_FAILURE` intentionally keeps the value (`1`) that pre-T-1001
+/// callers of `main` already observed for unspecialised failures (see
+/// `tests/cli.rs`'s `NotImplemented` assertions); `NOT_AUTHENTICATED` and
+/// `OFFLINE` were previously collapsed onto that same value, which failed
+/// this task's own acceptance criterion that auth failures get a code
+/// *dedicated* to (i.e. distinct from) the generic fallback. They now use
+/// distinct values; `tests/auth_cli.rs`'s not-authenticated assertions were
+/// updated alongside this change.
+#[must_use]
+pub fn exit_code(error: &AppError) -> i32 {
+    /// Fallback code for every failure that is not one of the dedicated
+    /// classes below.
+    const GENERIC_FAILURE: i32 = 1;
+    /// Dedicated code for authentication failures.
+    const NOT_AUTHENTICATED: i32 = 3;
+    /// Dedicated code for offline / transport failures.
+    const OFFLINE: i32 = 4;
+
+    match error {
+        AppError::Auth(AuthError::NotAuthenticated) | AppError::Cli(CliError::NotAuthenticated) => {
+            NOT_AUTHENTICATED
+        }
+        AppError::Cli(CliError::Offline) | AppError::Api(ApiError::Transport { .. }) => OFFLINE,
+        _ => GENERIC_FAILURE,
+    }
 }
 
 /// Errors raised while loading the TOML config file.
@@ -530,6 +577,67 @@ pub enum UiError {
     },
 }
 
+/// Errors raised by the non-interactive one-shot CLI commands' output /
+/// exit-code handling (T-1001, EPIC-11).
+///
+/// No variant here may carry raw token material; `NotAuthenticated` only
+/// forwards the same unit variant shape as [`AuthError::NotAuthenticated`]
+/// (constructed by CLI command code that wants a dedicated
+/// `AppError::Cli(..)` path distinct from `AppError::Auth(..)`), `Offline`
+/// is unit, and `Io` wraps an opaque [`io::Error`].
+///
+/// `Debug` is implemented manually (not derived) because the standard
+/// `derive(Debug)` would print `Io`'s `io::Error` field via its own `Debug`
+/// impl, which — unlike `Display` — is not under this module's control and
+/// can include an arbitrary caller-supplied message (e.g. one built via
+/// `io::Error::other`). The manual impl below never renders that message.
+#[non_exhaustive]
+#[derive(Error)]
+pub enum CliError {
+    /// No token is available; mirrors [`AuthError::NotAuthenticated`] for
+    /// CLI call sites that raise the condition directly as a `CliError`.
+    #[error("not authenticated: no API token is stored; run `todoist-tui auth` to add one")]
+    NotAuthenticated,
+
+    /// The command requires network access but none is available (DNS,
+    /// connect, or timeout failure below the API-client layer).
+    #[error("offline: could not reach the Todoist API")]
+    Offline,
+
+    /// Writing command output (stdout/stderr) failed at the OS level.
+    ///
+    /// Unlike every other `io::Error`-wrapping variant in this module, the
+    /// Display message deliberately does *not* interpolate `{source}`: an
+    /// `io::Error`'s message is normally just an OS errno string, but it can
+    /// also be built from an arbitrary caller-supplied string (for example
+    /// via `io::Error::other`), so nothing upstream of this variant is
+    /// guaranteed never to construct one from a string that happens to
+    /// contain a token or other secret. `#[source]` is kept so the error
+    /// chain (`Error::source`, backtraces) still reaches the underlying
+    /// error; only the directly-rendered Display/Debug text is trimmed.
+    #[error("CLI output I/O failed")]
+    Io {
+        /// Underlying OS error. Not rendered in `Display`/`Debug` — see the
+        /// variant doc comment.
+        #[source]
+        source: io::Error,
+    },
+}
+
+impl std::fmt::Debug for CliError {
+    /// Hand-written to avoid `io::Error`'s own `Debug` impl, which (unlike
+    /// its `Display`) can surface an arbitrary caller-supplied message (see
+    /// the `Io` variant's doc comment) and is outside this module's
+    /// control.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAuthenticated => f.write_str("NotAuthenticated"),
+            Self::Offline => f.write_str("Offline"),
+            Self::Io { .. } => f.write_str("Io { source: <redacted io::Error> }"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -676,7 +784,8 @@ mod tests {
 
     /// A `reqwest::Error` built fully offline (no socket is opened): a
     /// relative URL makes `RequestBuilder::build` fail with `Kind::Builder`.
-    /// Stands in for the opaque transport source `ApiError::Transport` wraps.
+    /// Mirrors the same technique used for `ApiError` tests elsewhere in
+    /// the crate.
     fn reqwest_stub_error() -> reqwest::Error {
         reqwest::Client::new()
             .get("::not a url")
@@ -971,5 +1080,87 @@ mod tests {
                 _ => assert!(err.source().is_some(), "missing source for {err:?}"),
             }
         }
+    }
+
+    #[test]
+    fn exit_code_maps_auth_failures_to_a_dedicated_nonzero_code() {
+        let from_auth = exit_code(&AppError::from(AuthError::NotAuthenticated));
+        let from_cli = exit_code(&AppError::from(CliError::NotAuthenticated));
+        assert_ne!(
+            from_auth, 0,
+            "AuthError::NotAuthenticated must not map to 0"
+        );
+        assert_ne!(from_cli, 0, "CliError::NotAuthenticated must not map to 0");
+        assert_eq!(
+            from_auth, from_cli,
+            "both not-authenticated paths must share one dedicated code"
+        );
+    }
+
+    #[test]
+    fn exit_code_maps_offline_and_transport_failures_to_a_dedicated_nonzero_code() {
+        let from_cli_offline = exit_code(&AppError::from(CliError::Offline));
+        let from_api_transport = exit_code(&AppError::from(ApiError::Transport {
+            source: reqwest_stub_error(),
+        }));
+        assert_ne!(from_cli_offline, 0, "CliError::Offline must not map to 0");
+        assert_ne!(
+            from_api_transport, 0,
+            "ApiError::Transport must not map to 0"
+        );
+        assert_eq!(
+            from_cli_offline, from_api_transport,
+            "both offline/transport paths must share one dedicated code"
+        );
+    }
+
+    #[test]
+    fn exit_code_falls_back_to_a_nonzero_generic_code_for_unspecialised_failures() {
+        let generic = exit_code(&AppError::NotImplemented("today"));
+        assert_ne!(generic, 0, "generic fallback must not map to 0");
+    }
+
+    #[test]
+    fn exit_code_auth_offline_and_generic_codes_are_mutually_distinct() {
+        let auth = exit_code(&AppError::from(AuthError::NotAuthenticated));
+        let offline = exit_code(&AppError::from(CliError::Offline));
+        let generic = exit_code(&AppError::NotImplemented("today"));
+
+        assert_ne!(auth, offline, "auth and offline codes must be distinct");
+        assert_ne!(
+            auth, generic,
+            "auth code must be dedicated, not the generic fallback"
+        );
+        assert_ne!(
+            offline, generic,
+            "offline code must be dedicated, not the generic fallback"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // T-1001 acceptance 7: `CliError::Io` must never interpolate the
+    // underlying `io::Error`'s message (which may be built from an
+    // arbitrary string, e.g. via `io::Error::other`) into its own
+    // Display/Debug rendering.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn cli_error_io_never_leaks_a_token_embedded_in_the_source_io_error() {
+        let cli_err = CliError::Io {
+            source: io::Error::other(FIXTURE_TOKEN),
+        };
+        let app: AppError = cli_err.into();
+
+        let display = format!("{app}");
+        let debug = format!("{app:?}");
+
+        assert!(
+            !display.contains(FIXTURE_TOKEN),
+            "Display leaked the fixture token: {display}"
+        );
+        assert!(
+            !debug.contains(FIXTURE_TOKEN),
+            "Debug leaked the fixture token: {debug}"
+        );
     }
 }
