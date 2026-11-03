@@ -74,6 +74,10 @@ pub enum AppError {
     /// T-1001, EPIC-11) failed.
     #[error("cli: {0}")]
     Cli(#[from] CliError),
+
+    /// A user-initiated task action (add/edit/complete/..., EPIC-08) failed.
+    #[error("action: {0}")]
+    Action(#[from] ActionError),
 }
 
 /// Maps an [`AppError`] to a process exit code for `main`'s one-shot CLI
@@ -638,6 +642,49 @@ impl std::fmt::Debug for CliError {
     }
 }
 
+/// Errors raised while executing a user-initiated task action (add, edit,
+/// complete, ..., EPIC-08).
+///
+/// `Queue`/`Cache` wrap the write-queue (EPIC-05) and local-cache (EPIC-04)
+/// failure as an opaque boxed error: those subsystems land their own typed
+/// error enums in parallel epics, and this scaffold only needs a `source`
+/// to chain through, not a compile-time dependency on their exact shape.
+/// No variant here may carry raw secret material.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum ActionError {
+    /// The action requires an authenticated session but none is available.
+    #[error("not authenticated: no API token is stored; run `todoist-tui auth` to add one")]
+    NotAuthenticated,
+
+    /// Enqueuing the action onto the durable write queue (EPIC-05) failed.
+    #[error("failed to queue action: {source}")]
+    Queue {
+        /// Underlying write-queue error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Reading from or writing to the local task cache (EPIC-04) failed
+    /// while applying the action.
+    #[error("failed to update local cache: {source}")]
+    Cache {
+        /// Underlying cache/store error.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// A field on the action's payload failed validation before it was
+    /// queued.
+    #[error("invalid value for {field}: {reason}")]
+    InvalidInput {
+        /// Name of the offending payload field.
+        field: &'static str,
+        /// Human-readable description; never carries secret material.
+        reason: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1162,5 +1209,46 @@ mod tests {
             !debug.contains(FIXTURE_TOKEN),
             "Debug leaked the fixture token: {debug}"
         );
+    }
+
+    fn sample_action_errors() -> Vec<ActionError> {
+        vec![
+            ActionError::NotAuthenticated,
+            ActionError::Queue {
+                source: Box::new(io::Error::other("write queue unavailable")),
+            },
+            ActionError::Cache {
+                source: Box::new(io::Error::other("cache locked")),
+            },
+            ActionError::InvalidInput {
+                field: "content",
+                reason: "must not be empty".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn action_error_variants_never_leak_the_fixture_token() {
+        for err in sample_action_errors() {
+            let display = format!("{err}");
+            let debug = format!("{err:?}");
+            assert!(
+                !display.contains(FIXTURE_TOKEN),
+                "Display leaked fixture token: {display}"
+            );
+            assert!(
+                !debug.contains(FIXTURE_TOKEN),
+                "Debug leaked fixture token: {debug}"
+            );
+        }
+    }
+
+    #[test]
+    fn app_error_action_has_action_prefix_and_from_conversion() {
+        let app: AppError = ActionError::NotAuthenticated.into();
+        assert!(matches!(app, AppError::Action(_)));
+        let shown = app.to_string();
+        assert!(shown.starts_with("action: "), "got {shown}");
+        assert!(shown.contains("not authenticated"), "got {shown}");
     }
 }
