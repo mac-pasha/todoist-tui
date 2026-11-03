@@ -13,6 +13,19 @@
 //! permissions (no equivalent primitive in `std` — tightening Windows ACLs
 //! is out of scope for this task).
 //!
+//! **Loose-mode contract (T-1114, EPIC-12):** [`FileTokenSource::load`]
+//! chmods a pre-existing token file to `0600` *in place, before reading
+//! it* whenever its on-disk mode is wider than `0600` (e.g. a file left at
+//! `0644`/`0666` by an older build that predates this guard, or restored
+//! from a backup). This is a silent repair, not a rejection: `load`
+//! returns the token successfully either way. Hard-failing here would
+//! break every user upgrading from a version that wrote the token under
+//! the process umask instead of `0600` at creation time — the file is
+//! already on disk and already readable by other local users, so refusing
+//! to read it back gains nothing and forces a re-`auth` for no security
+//! benefit. Do not change this to a rejection without also considering
+//! how existing installs recover.
+//!
 //! Like every [`TokenSource`] implementation, this backend MUST NOT log
 //! token material (see the trait docs in [`crate::auth::source`]); `store`
 //! writes the exposed token directly to the file descriptor and never
@@ -79,6 +92,39 @@ impl FileTokenSource {
             path: self.path.clone(),
             source,
         }
+    }
+
+    /// If the token file exists and its mode grants any permission bit
+    /// beyond owner-read-write (`0600`) — e.g. group/other read, write or
+    /// execute, or an owner-execute bit — tightens it to `0600` in place.
+    ///
+    /// Crucially this is a one-directional ratchet: a mode that is already
+    /// equal to or *more* restrictive than `0600` (e.g. `0400`, `0440`,
+    /// `0000`) is a strict subset of `0600`'s bits and is left untouched.
+    /// We never loosen a deliberately hardened file back up to `0600` —
+    /// doing so would silently undo an intentional owner/ops decision to
+    /// make the token file read-only or otherwise more restrictive. The
+    /// check is therefore `mode & 0o777 & !0o600 != 0` ("are there bits
+    /// set outside owner-rw?"), not `mode & 0o777 != 0o600` ("is it not
+    /// exactly 0600?").
+    ///
+    /// A missing file (not yet created, or removed) is not an error here:
+    /// [`FileTokenSource::load`] handles `NotFound` itself on the read
+    /// that follows.
+    #[cfg(unix)]
+    fn tighten_if_loose(&self) -> Result<()> {
+        let metadata = match fs::metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(self.io_err(err).into()),
+        };
+
+        if metadata.permissions().mode() & 0o777 & !OWNER_READ_WRITE != 0 {
+            fs::set_permissions(&self.path, fs::Permissions::from_mode(OWNER_READ_WRITE))
+                .map_err(|source| self.io_err(source))?;
+        }
+
+        Ok(())
     }
 
     /// Atomic, mode-at-creation store for Unix: write the token to a
@@ -153,7 +199,16 @@ impl super::source::TokenSource for FileTokenSource {
     /// `fs::read_to_string`'s own error) rather than a dedicated variant:
     /// a non-UTF-8 token file is corruption indistinguishable in practice
     /// from any other unreadable file, and callers already handle `Io`.
+    ///
+    /// On Unix, a pre-existing file whose mode is wider than `0600` is
+    /// chmod'd to `0600` in place before being read (see the "Loose-mode
+    /// contract" module docs); this never turns into an error, so
+    /// upgrading from an older build that left the file loose keeps
+    /// working.
     fn load(&self) -> Result<Option<Token>> {
+        #[cfg(unix)]
+        self.tighten_if_loose()?;
+
         match fs::read_to_string(&self.path) {
             Ok(raw) => Ok(Some(Token::new(raw.trim_end().to_string())?)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -174,7 +229,24 @@ impl super::source::TokenSource for FileTokenSource {
     /// ignored so the original error is always what callers see.
     fn store(&self, token: &Token) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|source| self.io_err(source))?;
+            // Shares the ancestor-walk logic with `ensure_config_dir`/
+            // `ensure_state_dir` (T-1114, EPIC-12): any parent component
+            // this call itself creates (normally the config directory,
+            // the first time `store` runs) is left at `0700` on Unix,
+            // same umask-gap fix, same create-then-tighten shape. The
+            // `_new_only` variant never re-tightens `parent` itself when
+            // it already existed, because callers may construct a
+            // `FileTokenSource` at an arbitrary pre-existing directory
+            // this crate does not own (e.g. a shared temp dir in tests).
+            // Errors are reported against `self.path` (the token file),
+            // not the inner helper's directory path, matching every other
+            // `AuthError::Io` this module raises.
+            crate::config::paths::create_dir_all_tightened_new_only(parent).map_err(|err| {
+                let crate::error::ConfigError::Io { source, .. } = err else {
+                    unreachable!("create_dir_all_tightened_new_only only produces ConfigError::Io")
+                };
+                self.io_err(source)
+            })?;
         }
 
         #[cfg(unix)]
@@ -496,6 +568,147 @@ mod unit_tests {
         source.store(&token(FAKE_B)).expect("store again");
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "mode was {mode:o}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ---- T-1114: load() tightens a loose pre-existing token file (sdlc-unit-tester) ----
+
+    /// A token file left at 0644 (classic umask-022 artifact) by an older
+    /// build must be accepted, read back intact, and re-chmodded to 0600 on
+    /// disk — never rejected (upgrade-compatibility contract).
+    #[cfg(unix)]
+    #[test]
+    fn load_tightens_pre_existing_0644_file_to_0600_and_returns_token() {
+        let root = temp_root("load-tighten-644");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        fs::write(&path, FAKE_A.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load of 0644 file must not error");
+        let loaded = loaded.expect("token present");
+        assert_eq!(
+            loaded.expose(),
+            FAKE_A,
+            "token value must survive tightening"
+        );
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "on-disk mode after load was {mode:o}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// World-writable 0666 is the loosest realistic case: same tightening
+    /// assertion, and the returned value must be byte-identical to what was
+    /// written (tightening must not touch contents).
+    #[cfg(unix)]
+    #[test]
+    fn load_tightens_pre_existing_0666_file_to_0600_and_preserves_content() {
+        let root = temp_root("load-tighten-666");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        let body = format!("{FAKE_B}\n"); // trailing newline: content check
+        fs::write(&path, body.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load of 0666 file must not error");
+        let loaded = loaded.expect("token present");
+        // load trims trailing whitespace into a Token; the file on disk must
+        // still contain exactly what we wrote — chmod does not rewrite data.
+        assert_eq!(loaded.expose(), FAKE_B);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk, body,
+            "file contents must be byte-identical after tightening"
+        );
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "on-disk mode after load was {mode:o}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A file already at exactly 0600 must load fine and stay at 0600.
+    /// NOTE: we deliberately do NOT assert "no chmod syscall happened"
+    /// via mtime: the implementation's condition is `mode & 0o777 != 0o600`,
+    /// which already guarantees no `set_permissions` call on a 0600 file,
+    /// and mtime resolution on some filesystems is 1s, making an mtime
+    /// equality assertion flaky. The mode-equality assertion plus the
+    /// source-level condition check below are sufficient.
+    #[cfg(unix)]
+    #[test]
+    fn load_on_already_0600_file_is_untouched_and_returns_token() {
+        let root = temp_root("load-0600-untouched");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        fs::write(&path, FAKE_A.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let before = fs::metadata(&path).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load ok").expect("token present");
+        assert_eq!(loaded.expose(), FAKE_A);
+        let after = fs::metadata(&path).unwrap();
+        assert_eq!(
+            after.permissions().mode() & 0o777,
+            0o600,
+            "0600 file must stay 0600"
+        );
+        assert_eq!(
+            before.modified().unwrap(),
+            after.modified().unwrap(),
+            "a 0600 file must not be rewritten (mtime changed)"
+        );
+        assert_eq!(
+            std::os::unix::fs::MetadataExt::mtime_nsec(&before),
+            std::os::unix::fs::MetadataExt::mtime_nsec(&after)
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Missing file: `load` must still return `Ok(None)`, not panic, and
+    /// must not create the file as a side effect of the tighten step.
+    #[cfg(unix)]
+    #[test]
+    fn load_on_missing_file_returns_none_and_creates_nothing() {
+        let root = temp_root("load-missing");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        assert!(!path.exists());
+        let result = FileTokenSource::at(path.clone())
+            .load()
+            .expect("missing file is not an error");
+        assert!(result.is_none());
+        assert!(!path.exists(), "load() must not create the token file");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Adversarial probe for point 9 of the test brief, now updated after
+    /// the T-1114 bug fix: the coder's original condition was
+    /// `mode & 0o777 != 0o600`, which was NOT "wider-than-0600" — a MORE
+    /// restrictive mode like 0400 (owner read-only) also failed that check
+    /// and got CHMODDED back UP to 0600. This test used to pin that
+    /// observed (buggy) behaviour. `tighten_if_loose` now uses a
+    /// one-directional ratchet (`mode & 0o777 & !0o600 != 0`), so a 0400
+    /// file is correctly left untouched by `load()`. The assertion below
+    /// has been flipped to match the corrected, documented contract:
+    /// tightening never loosens a file that is already at or below `0600`.
+    #[cfg(unix)]
+    #[test]
+    fn load_on_0400_file_observed_behavior_pins_loosening_bug() {
+        let root = temp_root("load-0400-probe");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("token");
+        fs::write(&path, FAKE_B.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
+        let source = FileTokenSource::at(path.clone());
+        let loaded = source.load().expect("load of 0400 file must not error");
+        let loaded = loaded.expect("token present");
+        assert_eq!(loaded.expose(), FAKE_B);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        // FIXED behaviour: 0400 is a strict subset of 0600's bits, so it is
+        // left untouched by `tighten_if_loose` — no loosening occurs.
+        assert_eq!(
+            mode,
+            0o400,
+            "expected 0400 token file to stay at 0400 after load(); tighten_if_loose must never loosen a mode that is already a subset of 0600"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

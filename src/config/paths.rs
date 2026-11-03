@@ -21,6 +21,17 @@
 //! state home), so the state fallback is the project data directory — kept
 //! durable, never the purgeable cache directory — which gives the log file
 //! (T-006) and cache DB (EPIC-04) a stable home.
+//!
+//! On Unix, [`ensure_config_dir`] / [`ensure_state_dir`] tighten the
+//! returned directory (and any missing parent component they themselves
+//! create via `create_dir_all`) to owner-only (`0700`), re-applying the
+//! mode on every call so a directory that was ever widened (e.g. restored
+//! from a backup, or created by an older build before this guard existed)
+//! is silently re-tightened rather than left loose (T-1114, EPIC-12).
+//! Pre-existing ancestors above the directories this call creates are
+//! left untouched. Non-Unix platforms have no portable permission
+//! primitive in `std`, so the tightening step is compiled out there
+//! (`#[cfg(unix)]`) and behaviour is unchanged.
 
 // Consumers land in T-005 (config loader) and T-006 (log file), and the
 // unit tester wires the XDG tests into main.rs: `pub` alone does not
@@ -31,11 +42,20 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use directories::ProjectDirs;
 
 use crate::error::ConfigError;
+
+/// Permission bits applied to config/state directories on Unix: owner
+/// read/write/execute only (execute is required to traverse/list a
+/// directory).
+#[cfg(unix)]
+const DIR_MODE: u32 = 0o700;
 
 /// Reverse-DNS qualifier used by `ProjectDirs` on macOS / Windows.
 const QUALIFIER: &str = "com";
@@ -141,36 +161,133 @@ pub fn token_file() -> Result<PathBuf, ConfigError> {
 
 /// Creates the config directory (recursively) and returns its path.
 ///
-/// Idempotent: calling it when the directory already exists succeeds.
+/// Idempotent: calling it when the directory already exists succeeds. On
+/// Unix the directory (and any parent this call creates) is left at mode
+/// `0700`, re-applied on every call (see the module docs).
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::Io`] when the config directory cannot be created,
-/// or when the home directory cannot be determined.
+/// Returns [`ConfigError::Io`] when the config directory cannot be created
+/// or tightened, or when the home directory cannot be determined.
 pub fn ensure_config_dir() -> Result<PathBuf, ConfigError> {
     let dir = config_dir()?;
-    fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
-        path: dir.clone(),
-        source,
-    })?;
+    create_dir_all_tightened(&dir)?;
     Ok(dir)
 }
 
 /// Creates the state directory (recursively) and returns its path.
 ///
-/// Idempotent: calling it when the directory already exists succeeds.
+/// Idempotent: calling it when the directory already exists succeeds. On
+/// Unix the directory (and any parent this call creates) is left at mode
+/// `0700`, re-applied on every call (see the module docs).
 ///
 /// # Errors
 ///
-/// Returns [`ConfigError::Io`] when the state directory cannot be created,
-/// or when the home directory cannot be determined.
+/// Returns [`ConfigError::Io`] when the state directory cannot be created
+/// or tightened, or when the home directory cannot be determined.
 pub fn ensure_state_dir() -> Result<PathBuf, ConfigError> {
     let dir = state_dir()?;
-    fs::create_dir_all(&dir).map_err(|source| ConfigError::Io {
-        path: dir.clone(),
+    create_dir_all_tightened(&dir)?;
+    Ok(dir)
+}
+
+/// Creates `dir` (recursively, like [`fs::create_dir_all`]) and, on Unix,
+/// leaves it and every parent component this call itself created at mode
+/// `0700` — pre-existing ancestors above them are never touched. The
+/// target directory's mode is re-applied unconditionally, even when it
+/// already existed (e.g. at a wider mode such as `0755`/`0777`), so
+/// repeated calls are idempotently re-tightening rather than one-shot.
+///
+/// No-op permission-wise on non-Unix platforms: `std` has no portable
+/// primitive for tightening Windows ACLs, matching
+/// [`crate::auth::file_source`] and [`crate::db::open`]'s documented
+/// scope.
+///
+#[cfg(unix)]
+fn create_dir_all_tightened(dir: &Path) -> Result<(), ConfigError> {
+    create_dir_all_impl(dir, true)
+}
+
+#[cfg(not(unix))]
+fn create_dir_all_tightened(dir: &Path) -> Result<(), ConfigError> {
+    fs::create_dir_all(dir).map_err(|source| ConfigError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })
+}
+
+/// Like [`create_dir_all_tightened`], but never touches `dir` itself (or
+/// any other ancestor) when it already existed before this call — only
+/// components this call newly creates are left at `0700`.
+///
+/// `pub(crate)` for [`crate::auth::file_source`]: the token file's parent
+/// is normally the config directory (freshly created the first time
+/// `store` runs, same umask gap as [`ensure_config_dir`]), but callers may
+/// also construct a [`crate::auth::FileTokenSource`] at an arbitrary path
+/// whose parent is some pre-existing directory outside this crate's
+/// control (e.g. the system temp directory in tests) — retightening an
+/// already-existing, not-ours directory there is both wrong (not this
+/// call's directory to tighten) and can fail outright (insufficient
+/// permission to `chmod` a directory the process does not own).
+#[cfg(unix)]
+pub(crate) fn create_dir_all_tightened_new_only(dir: &Path) -> Result<(), ConfigError> {
+    create_dir_all_impl(dir, false)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn create_dir_all_tightened_new_only(dir: &Path) -> Result<(), ConfigError> {
+    fs::create_dir_all(dir).map_err(|source| ConfigError::Io {
+        path: dir.to_path_buf(),
+        source,
+    })
+}
+
+/// Shared implementation: creates `dir` (recursively, like
+/// [`fs::create_dir_all`]) and tightens every ancestor component this
+/// call itself created to `0700`. When `dir` already existed, it is
+/// additionally re-tightened only if `retighten_preexisting_target` is
+/// set — pre-existing ancestors *above* the ones this call creates are
+/// never touched either way.
+#[cfg(unix)]
+fn create_dir_all_impl(dir: &Path, retighten_preexisting_target: bool) -> Result<(), ConfigError> {
+    // Ancestors (closest first) that do not exist yet, i.e. the exact
+    // chain `create_dir_all` is about to create. Stops at the first
+    // already-existing ancestor, which is left untouched.
+    let to_create: Vec<PathBuf> = dir
+        .ancestors()
+        .take_while(|p| !p.exists())
+        .map(Path::to_path_buf)
+        .collect();
+
+    fs::create_dir_all(dir).map_err(|source| ConfigError::Io {
+        path: dir.to_path_buf(),
         source,
     })?;
-    Ok(dir)
+
+    if to_create.is_empty() {
+        // `dir` already existed (possibly at a wider mode).
+        if retighten_preexisting_target {
+            tighten_dir(dir)?;
+        }
+    } else {
+        for p in &to_create {
+            tighten_dir(p)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Sets `path`'s mode to [`DIR_MODE`] (`0700`), mapping a failure into
+/// [`ConfigError::Io`].
+#[cfg(unix)]
+fn tighten_dir(path: &Path) -> Result<(), ConfigError> {
+    fs::set_permissions(path, fs::Permissions::from_mode(DIR_MODE)).map_err(|source| {
+        ConfigError::Io {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
 }
 
 /// Returns `Some(dir)` when the environment variable is set and non-empty
@@ -521,6 +638,133 @@ mod unit_tests {
         assert_eq!(tok.file_name().unwrap(), "token");
         #[cfg(target_os = "linux")]
         assert!(tok.ends_with(".config/todoist-tui/token"), "got {tok:?}");
+    }
+
+    // ---- T-1114: 0700 permission enforcement (sdlc-unit-tester) ----
+
+    #[cfg(unix)]
+    fn dir_mode_bits(path: &Path) -> u32 {
+        fs::metadata(path)
+            .expect("metadata for dir-mode assertion")
+            .permissions()
+            .mode()
+            & 0o777
+    }
+
+    #[cfg(unix)]
+    fn assert_mode_0700(path: &Path, label: &str) {
+        let mode = dir_mode_bits(path);
+        assert_eq!(mode, 0o700, "{label} must be exactly 0700, got {mode:o}");
+    }
+
+    /// A freshly created (previously non-existent) config dir must come back
+    /// at exactly 0700, not 0700 & !umask.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_config_dir_fresh_dir_is_exactly_0700() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("cfg-t1114-fresh");
+        env::set_var("XDG_CONFIG_HOME", &tmp);
+        let dir = ensure_config_dir().expect("create");
+        assert_mode_0700(&dir, "fresh config dir");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Same, for the state dir.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_state_dir_fresh_dir_is_exactly_0700() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("state-t1114-fresh");
+        env::set_var("XDG_STATE_HOME", &tmp);
+        let dir = ensure_state_dir().expect("create");
+        assert_mode_0700(&dir, "fresh state dir");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// A directory that already exists with a wider mode (0755 and 0777)
+    /// must be re-tightened to 0700 by `ensure_config_dir`.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_config_dir_re_tightens_pre_existing_wider_modes() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("cfg-t1114-retighten");
+        for wide in [0o755, 0o777] {
+            let base = tmp.join(format!("b{wide:o}"));
+            fs::create_dir_all(&base).expect("create base");
+            fs::set_permissions(&base, fs::Permissions::from_mode(wide)).expect("widen");
+            env::set_var("XDG_CONFIG_HOME", &base);
+            let dir = ensure_config_dir().expect("ensure");
+            assert_mode_0700(&dir, "pre-existing wider config dir");
+        }
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Calling `ensure_state_dir` twice in a row must leave 0700 both times
+    /// (idempotent re-tightening, no error on the second call).
+    #[cfg(unix)]
+    #[test]
+    fn ensure_state_dir_twice_is_idempotent_at_0700() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("state-t1114-idem");
+        env::set_var("XDG_STATE_HOME", &tmp);
+        let a = ensure_state_dir().expect("first call");
+        assert_mode_0700(&a, "first call");
+        let b = ensure_state_dir().expect("second call");
+        assert_eq!(a, b);
+        assert_mode_0700(&b, "second call");
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// When only the leaf `todoist-tui` component is missing, the function
+    /// must tighten the leaf to 0700 but must NOT touch the already-existing
+    /// grandparent (pre-created here at 0755).
+    #[cfg(unix)]
+    #[test]
+    fn ensure_config_dir_touches_leaf_but_not_pre_existing_grandparent() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("cfg-t1114-ancestor");
+        let grandparent = tmp.join("cfg");
+        fs::create_dir_all(&grandparent).expect("create grandparent");
+        fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o755)).expect("widen");
+        let base = grandparent.join("base"); // missing intermediate
+        env::set_var("XDG_CONFIG_HOME", &base);
+        let dir = ensure_config_dir().expect("ensure");
+        // Leaf and the intermediate the call itself created are 0700...
+        assert_mode_0700(&dir, "leaf (base/todoist-tui)");
+        assert_mode_0700(&base, "intermediate created by this call");
+        // ...but the pre-existing grandparent keeps its original 0755.
+        assert_eq!(
+            dir_mode_bits(&grandparent),
+            0o755,
+            "pre-existing grandparent must be left untouched"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Same ancestor-non-interference check, but with TWO missing components
+    /// below the pre-existing grandparent: both created components must be
+    /// 0700, the grandparent still 0755.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_state_dir_created_chain_all_0700_pre_existing_ancestor_unmodified() {
+        let _g = EnvGuard::new();
+        let tmp = tempdir("state-t1114-chain");
+        let grandparent = tmp.join("st");
+        fs::create_dir_all(&grandparent).expect("create grandparent");
+        fs::set_permissions(&grandparent, fs::Permissions::from_mode(0o755)).expect("widen");
+        let base = grandparent.join("l1").join("l2");
+        env::set_var("XDG_STATE_HOME", &base);
+        let dir = ensure_state_dir().expect("ensure");
+        assert_mode_0700(&dir, "leaf");
+        assert_mode_0700(&base, "created component 2 (l1/l2)");
+        assert_mode_0700(&grandparent.join("l1"), "created component 1");
+        assert_eq!(
+            dir_mode_bits(&grandparent),
+            0o755,
+            "pre-existing grandparent must be left untouched"
+        );
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
