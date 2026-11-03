@@ -13,6 +13,19 @@
 //! permissions (no equivalent primitive in `std` — tightening Windows ACLs
 //! is out of scope for this task).
 //!
+//! **Loose-mode contract (T-1114, EPIC-12):** [`FileTokenSource::load`]
+//! chmods a pre-existing token file to `0600` *in place, before reading
+//! it* whenever its on-disk mode is wider than `0600` (e.g. a file left at
+//! `0644`/`0666` by an older build that predates this guard, or restored
+//! from a backup). This is a silent repair, not a rejection: `load`
+//! returns the token successfully either way. Hard-failing here would
+//! break every user upgrading from a version that wrote the token under
+//! the process umask instead of `0600` at creation time — the file is
+//! already on disk and already readable by other local users, so refusing
+//! to read it back gains nothing and forces a re-`auth` for no security
+//! benefit. Do not change this to a rejection without also considering
+//! how existing installs recover.
+//!
 //! Like every [`TokenSource`] implementation, this backend MUST NOT log
 //! token material (see the trait docs in [`crate::auth::source`]); `store`
 //! writes the exposed token directly to the file descriptor and never
@@ -79,6 +92,26 @@ impl FileTokenSource {
             path: self.path.clone(),
             source,
         }
+    }
+
+    /// If the token file exists and its mode is wider than `0600`,
+    /// tightens it to `0600` in place. A missing file (not yet created,
+    /// or removed) is not an error here: [`FileTokenSource::load`] handles
+    /// `NotFound` itself on the read that follows.
+    #[cfg(unix)]
+    fn tighten_if_loose(&self) -> Result<()> {
+        let metadata = match fs::metadata(&self.path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(self.io_err(err).into()),
+        };
+
+        if metadata.permissions().mode() & 0o777 != OWNER_READ_WRITE {
+            fs::set_permissions(&self.path, fs::Permissions::from_mode(OWNER_READ_WRITE))
+                .map_err(|source| self.io_err(source))?;
+        }
+
+        Ok(())
     }
 
     /// Atomic, mode-at-creation store for Unix: write the token to a
@@ -153,7 +186,16 @@ impl super::source::TokenSource for FileTokenSource {
     /// `fs::read_to_string`'s own error) rather than a dedicated variant:
     /// a non-UTF-8 token file is corruption indistinguishable in practice
     /// from any other unreadable file, and callers already handle `Io`.
+    ///
+    /// On Unix, a pre-existing file whose mode is wider than `0600` is
+    /// chmod'd to `0600` in place before being read (see the "Loose-mode
+    /// contract" module docs); this never turns into an error, so
+    /// upgrading from an older build that left the file loose keeps
+    /// working.
     fn load(&self) -> Result<Option<Token>> {
+        #[cfg(unix)]
+        self.tighten_if_loose()?;
+
         match fs::read_to_string(&self.path) {
             Ok(raw) => Ok(Some(Token::new(raw.trim_end().to_string())?)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -174,7 +216,24 @@ impl super::source::TokenSource for FileTokenSource {
     /// ignored so the original error is always what callers see.
     fn store(&self, token: &Token) -> Result<()> {
         if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|source| self.io_err(source))?;
+            // Shares the ancestor-walk logic with `ensure_config_dir`/
+            // `ensure_state_dir` (T-1114, EPIC-12): any parent component
+            // this call itself creates (normally the config directory,
+            // the first time `store` runs) is left at `0700` on Unix,
+            // same umask-gap fix, same create-then-tighten shape. The
+            // `_new_only` variant never re-tightens `parent` itself when
+            // it already existed, because callers may construct a
+            // `FileTokenSource` at an arbitrary pre-existing directory
+            // this crate does not own (e.g. a shared temp dir in tests).
+            // Errors are reported against `self.path` (the token file),
+            // not the inner helper's directory path, matching every other
+            // `AuthError::Io` this module raises.
+            crate::config::paths::create_dir_all_tightened_new_only(parent).map_err(|err| {
+                let crate::error::ConfigError::Io { source, .. } = err else {
+                    unreachable!("create_dir_all_tightened_new_only only produces ConfigError::Io")
+                };
+                self.io_err(source)
+            })?;
         }
 
         #[cfg(unix)]
