@@ -22,7 +22,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Mirror the error conventions of `AuthError`/`ApiError` in `src/error.rs` (thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`). Never touch the `Secret`/`REDACTED` helper in `src/log.rs`. No ratatui code in this task so the rest of the epic can start in parallel.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-602",

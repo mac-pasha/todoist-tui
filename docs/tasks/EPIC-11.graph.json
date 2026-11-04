@@ -26,7 +26,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Foundation for the whole epic; every other command task builds on `Output` and `exit_code`. Follow the error conventions already set by `AuthError`/`ApiError` in `src/error.rs` (thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`). Never format secrets directly - use the `Secret<T>` helper in `src/log.rs` and do not modify it. `src/cli/mod.rs` only gains `pub mod output;` and the `--no-color` global flag next to the existing `--config` flag; keep clap derive style consistent with the existing `Cli`/`Commands` definitions.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-1002",

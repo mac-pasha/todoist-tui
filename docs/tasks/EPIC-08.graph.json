@@ -22,7 +22,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pure type/scaffold task so the rest of the epic can land in parallel. Follow the error conventions already set by `ApiError`/`AuthError` in `src/error.rs` (thiserror, `#[non_exhaustive]`, crate-wide `Result<T> = Result<T, AppError>`). The `src/ui/` module tree and its `mod ui;` declaration come from the TUI shell epic (EPIC-07), which is being built in parallel - if `src/ui/mod.rs` does not exist yet on your base branch, stop and ask rather than inventing the shell. Never touch the `Secret`/`REDACTED` helper in `src/log.rs`.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-702",
