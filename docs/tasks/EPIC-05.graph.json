@@ -66,7 +66,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "The wire envelope already exists: `SyncRequest.commands` is a `Vec<serde_json::Value>` and `CommandStatus`/`CommandError` live in `src/api/sync.rs` (EPIC-03). This task only models a queued command and its JSON projection - no DB, no HTTP. `uuid` is already a dependency in Cargo.toml (v4 feature).",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-404",
