@@ -1,13 +1,14 @@
 //! Offline command queue (T-402, EPIC-05).
 //!
-//! This task only lands the error vocabulary (`QueueError` in
-//! `src/error.rs`) and this module scaffold; persistence, replay and
-//! conflict handling for queued Todoist Sync API commands arrive in later
-//! EPIC-05 tasks so the rest of the epic can land in parallel.
+//! T-402 landed the error vocabulary (`QueueError` in `src/error.rs`) and
+//! this module scaffold; T-403 adds the [`command`] submodule, modelling a
+//! single queued command and its Sync API JSON projection. Persistence and
+//! the replay loop are not wired up yet, so items here have no production
+//! consumer until later EPIC-05 tasks land — hence the module-scope
+//! `#![allow(dead_code, unused_imports)]`, same pattern as `error.rs`
+//! (T-003) and `src/api/mod.rs` (T-201).
+#![allow(dead_code, unused_imports)]
 
-// No submodules yet: later EPIC-05 tasks add queue persistence, command
-// (de)serialisation and the replay loop here. Left empty-bodied for now,
-// so there is nothing to mark `dead_code` — later tasks add the
-// `#![allow(dead_code)]` module-scope attribute if/when they introduce
-// unused-until-wired items, same pattern as `error.rs` (T-003) and
-// `src/api/mod.rs` (T-201).
+pub mod command;
+
+pub use command::{CommandState, QueuedCommand};
