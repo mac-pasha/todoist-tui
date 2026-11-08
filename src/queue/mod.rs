@@ -10,5 +10,8 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod command;
+pub mod schema;
+pub mod store;
 
 pub use command::{CommandState, QueuedCommand};
+pub use store::{CommandStateCounts, CommandStore};
