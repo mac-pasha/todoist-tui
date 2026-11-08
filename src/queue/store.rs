@@ -7,7 +7,7 @@
 //! state on submit/failure, delete on success, and look up a command by the
 //! temp id it's waiting on.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Params};
 use uuid::Uuid;
 
 use crate::error::{QueueError, Result};
@@ -60,26 +60,15 @@ impl<'a> CommandStore<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`QueueError::Storage`] on a SQLite failure, or a decode
-    /// error bubbled up from a row whose `state`/`args` cannot be parsed.
+    /// Returns [`QueueError::Storage`] on a SQLite failure. A stored row that
+    /// cannot be decoded yields a non-retryable error instead: see
+    /// [`RawCommand::decode`].
     pub fn pending(&self, limit: u32) -> Result<Vec<QueuedCommand>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT uuid, type, args, temp_id, state, attempts, created_at, error \
-                 FROM commands WHERE state = ?1 ORDER BY created_at, rowid LIMIT ?2",
-            )
-            .map_err(|source| QueueError::Storage { source })?;
-
-        let rows = stmt
-            .query_map(
-                params![CommandState::Pending.as_str(), limit],
-                row_to_command,
-            )
-            .map_err(|source| QueueError::Storage { source })?;
-
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|source| QueueError::Storage { source }.into())
+        self.query_commands(
+            "SELECT uuid, type, args, temp_id, state, attempts, created_at, error \
+             FROM commands WHERE state = ?1 ORDER BY created_at, rowid LIMIT ?2",
+            params![CommandState::Pending.as_str(), limit],
+        )
     }
 
     /// Flips every command in `uuids` to [`CommandState::InFlight`] and
@@ -136,22 +125,15 @@ impl<'a> CommandStore<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`QueueError::Storage`] on a SQLite failure.
+    /// Returns [`QueueError::Storage`] on a SQLite failure, or a
+    /// non-retryable error for an undecodable stored row (see
+    /// [`RawCommand::decode`]).
     pub fn referencing_temp_id(&self, temp_id: &str) -> Result<Vec<QueuedCommand>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT uuid, type, args, temp_id, state, attempts, created_at, error \
-                 FROM commands WHERE temp_id = ?1 ORDER BY created_at, rowid",
-            )
-            .map_err(|source| QueueError::Storage { source })?;
-
-        let rows = stmt
-            .query_map(params![temp_id], row_to_command)
-            .map_err(|source| QueueError::Storage { source })?;
-
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(|source| QueueError::Storage { source }.into())
+        self.query_commands(
+            "SELECT uuid, type, args, temp_id, state, attempts, created_at, error \
+             FROM commands WHERE temp_id = ?1 ORDER BY created_at, rowid",
+            params![temp_id],
+        )
     }
 
     /// Returns the number of commands currently in each [`CommandState`]
@@ -189,6 +171,25 @@ impl<'a> CommandStore<'a> {
         }
         Ok(counts)
     }
+
+    /// Runs a `SELECT` of the eight `commands` columns. Raw columns are read
+    /// inside rusqlite (genuine SQLite failures -> `Storage`); decoding
+    /// happens afterwards so a corrupt row is never reported as a retryable
+    /// storage error.
+    fn query_commands(&self, sql: &str, params: impl Params) -> Result<Vec<QueuedCommand>> {
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .map_err(|source| QueueError::Storage { source })?;
+        let raws = stmt
+            .query_map(params, read_raw)
+            .map_err(|source| QueueError::Storage { source })?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|source| QueueError::Storage { source })?;
+        raws.into_iter()
+            .map(|raw| raw.decode().map_err(Into::into))
+            .collect()
+    }
 }
 
 /// Count of commands per [`CommandState`], as returned by
@@ -203,58 +204,70 @@ pub struct CommandStateCounts {
     pub failed: u64,
 }
 
-/// Decodes one `commands` row into a [`QueuedCommand`].
-fn row_to_command(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedCommand> {
-    let uuid: String = row.get(0)?;
-    let kind: String = row.get(1)?;
-    let args: String = row.get(2)?;
-    let temp_id: Option<String> = row.get(3)?;
-    let state: String = row.get(4)?;
-    let attempts: u32 = row.get(5)?;
-    let created_at: i64 = row.get(6)?;
-    let error: Option<String> = row.get(7)?;
+/// One `commands` row exactly as stored: undecoded text columns.
+struct RawCommand {
+    uuid: String,
+    kind: String,
+    args: String,
+    temp_id: Option<String>,
+    state: String,
+    attempts: u32,
+    created_at: i64,
+    error: Option<String>,
+}
 
-    let uuid = Uuid::parse_str(&uuid).map_err(|err| decode_err("uuid", err))?;
-    let args = serde_json::from_str(&args).map_err(|err| decode_err("args", err))?;
-    let state = state
-        .parse::<CommandState>()
-        .map_err(|err| decode_err("state", err))?;
+impl RawCommand {
+    /// Decodes the stored text columns into a [`QueuedCommand`].
+    ///
+    /// Every failure here is non-retryable (retrying a corrupt row cannot
+    /// fix it): `args` -> [`QueueError::Serialize`]; `state` ->
+    /// [`QueueError::UnknownCommandType`] (from `CommandState::from_str`);
+    /// `uuid` -> [`QueueError::Serialize`] too, as no dedicated variant
+    /// exists (the uuid text failed to deserialise).
+    fn decode(self) -> std::result::Result<QueuedCommand, QueueError> {
+        let uuid = Uuid::parse_str(&self.uuid).map_err(|err| QueueError::Serialize {
+            source: <serde_json::Error as serde::de::Error>::custom(format!(
+                "stored command uuid: {err}"
+            )),
+        })?;
+        let args =
+            serde_json::from_str(&self.args).map_err(|source| QueueError::Serialize { source })?;
+        let state = self.state.parse::<CommandState>()?;
+        Ok(QueuedCommand {
+            uuid,
+            kind: self.kind,
+            args,
+            temp_id: self.temp_id,
+            state,
+            attempts: self.attempts,
+            created_at: self.created_at,
+            error: self.error,
+        })
+    }
+}
 
-    Ok(QueuedCommand {
-        uuid,
-        kind,
-        args,
-        temp_id,
-        state,
-        attempts,
-        created_at,
-        error,
+/// Reads one `commands` row's raw columns; only genuine SQLite errors can
+/// fail here.
+fn read_raw(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawCommand> {
+    Ok(RawCommand {
+        uuid: row.get(0)?,
+        kind: row.get(1)?,
+        args: row.get(2)?,
+        temp_id: row.get(3)?,
+        state: row.get(4)?,
+        attempts: row.get(5)?,
+        created_at: row.get(6)?,
+        error: row.get(7)?,
     })
 }
 
-/// Decode failure detail for one stored `commands` row. Surfaced only
-/// through `QueueError::Storage`'s source chain (never in user-facing
-/// text), so it stays crate-private.
-fn decode_err(
-    field: &'static str,
-    source: impl std::error::Error + Send + Sync + 'static,
-) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(
-        0,
-        rusqlite::types::Type::Text,
-        Box::new(RowDecodeError {
-            field,
-            source: Box::new(source),
-        }),
-    )
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("stored command row has an undecodable {field}: {source}")]
-struct RowDecodeError {
-    field: &'static str,
-    #[source]
-    source: Box<dyn std::error::Error + Send + Sync>,
+/// Test-only `query_row`-shaped decoder (existing tests read back single
+/// rows through it); production reads go through [`CommandStore`].
+#[cfg(test)]
+fn row_to_command(row: &rusqlite::Row<'_>) -> rusqlite::Result<QueuedCommand> {
+    read_raw(row)?
+        .decode()
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))
 }
 
 #[cfg(test)]
@@ -355,11 +368,12 @@ mod tests {
     // pending: filtering, ordering, limit.
     // ---------------------------------------------------------------
 
-    /// 5 commands: `0`,`1` pending; `2` `in_flight`; `3` failed; `4` pending
-    /// (`created_at` tie with `1`, so `rowid` breaks it).
+    /// 5 commands: `0`,`1` pending; `2` `in_flight`; `3` failed; `4` pending.
+    /// `4` is inserted before `1` with the same `created_at`, so `rowid`
+    /// order (`4`,`1`) differs from `uuid` order (`1`,`4`).
     fn mixed_fixture(conn: &Connection) {
         insert(conn, &command(0, 3_000));
-        insert(conn, &command(1, 2_000));
+        insert(conn, &command(4, 2_000));
         let mut flying = command(2, 1_000);
         flying.state = CommandState::InFlight;
         flying.attempts = 1;
@@ -368,7 +382,7 @@ mod tests {
         dead.state = CommandState::Failed;
         dead.error = Some("fixture error".into());
         insert(conn, &dead);
-        insert(conn, &command(4, 2_000));
+        insert(conn, &command(1, 2_000));
     }
 
     #[test]
@@ -390,7 +404,7 @@ mod tests {
         mixed_fixture(&conn);
         let got = CommandStore::new(&conn).pending(100).expect("pending");
         let order: Vec<u8> = got.iter().map(|c| c.uuid.as_bytes()[15]).collect();
-        assert_eq!(order, vec![1, 4, 0], "created_at asc, ties by rowid");
+        assert_eq!(order, vec![4, 1, 0], "created_at asc, ties by rowid");
     }
 
     #[test]
@@ -403,7 +417,7 @@ mod tests {
             got.iter()
                 .map(|c| c.uuid.as_bytes()[15])
                 .collect::<Vec<_>>(),
-            vec![1, 4]
+            vec![4, 1]
         );
         assert_eq!(
             store.pending(0).expect("pending(0)"),
@@ -642,5 +656,91 @@ mod tests {
                 failed: 0,
             }
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Corrupt rows: decode failures are non-retryable, not `Storage`.
+    // ---------------------------------------------------------------
+
+    /// Plants a raw row, bypassing `insert`, so any column can be corrupt.
+    fn raw_insert(conn: &Connection, uuid: &str, args: &str, temp_id: Option<&str>, state: &str) {
+        conn.execute(
+            "INSERT INTO commands (uuid, type, args, temp_id, state, created_at) \
+             VALUES (?1, 'item_add', ?2, ?3, ?4, 1)",
+            params![uuid, args, temp_id, state],
+        )
+        .expect("raw insert");
+    }
+
+    #[test]
+    fn pending_with_non_json_args_is_non_retryable_serialize_error() {
+        let conn = fresh();
+        raw_insert(&conn, &uuid(1).to_string(), "not json", None, "pending");
+        match CommandStore::new(&conn).pending(10) {
+            Err(AppError::Queue(err @ QueueError::Serialize { .. })) => {
+                assert!(!err.is_retryable());
+            }
+            other => panic!("expected Queue(Serialize), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn referencing_temp_id_with_unknown_state_is_non_retryable_unknown_command_type() {
+        let conn = fresh();
+        raw_insert(
+            &conn,
+            &uuid(1).to_string(),
+            "{}",
+            Some("tmp-fixture-z"),
+            "zapped",
+        );
+        match CommandStore::new(&conn).referencing_temp_id("tmp-fixture-z") {
+            Err(AppError::Queue(err @ QueueError::UnknownCommandType { .. })) => {
+                assert!(!err.is_retryable());
+                assert!(err.to_string().contains("zapped"), "got {err}");
+            }
+            other => panic!("expected Queue(UnknownCommandType), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pending_with_invalid_uuid_is_non_retryable_serialize_error() {
+        let conn = fresh();
+        raw_insert(&conn, "not-a-uuid", "{}", None, "pending");
+        match CommandStore::new(&conn).pending(10) {
+            Err(AppError::Queue(err @ QueueError::Serialize { .. })) => {
+                assert!(!err.is_retryable());
+            }
+            other => panic!("expected Queue(Serialize), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn good_row_next_to_corrupt_row_fails_whole_call() {
+        let conn = fresh();
+        insert(&conn, &command(1, 1_000));
+        raw_insert(&conn, &uuid(2).to_string(), "not json", None, "pending");
+        let store = CommandStore::new(&conn);
+        // Fail-fast per call: one bad row poisons the batch, so no caller
+        // can observe a partial result that hides the corrupt row.
+        assert!(matches!(
+            store.pending(10),
+            Err(AppError::Queue(QueueError::Serialize { .. }))
+        ));
+        assert!(stored(&conn, 1).uuid == uuid(1), "good row still stored");
+    }
+
+    #[test]
+    fn genuine_sqlite_failure_on_read_stays_retryable_storage() {
+        let conn = Connection::open_in_memory().expect("open");
+        let store = CommandStore::new(&conn);
+        for res in [store.pending(10), store.referencing_temp_id("tmp-x")] {
+            match res {
+                Err(AppError::Queue(err @ QueueError::Storage { .. })) => {
+                    assert!(err.is_retryable());
+                }
+                other => panic!("expected Queue(Storage), got {other:?}"),
+            }
+        }
     }
 }
