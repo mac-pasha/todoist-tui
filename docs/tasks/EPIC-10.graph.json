@@ -210,7 +210,7 @@
         "`cargo test --all` passes"
       ],
       "context": "The epic's acceptance demands <16ms per keystroke at 5k items. Existing integration tests live in `tests/` (see `tests/sync_client.rs`) - follow their layout and the fixture conventions in `tests/fixtures/`. Use fake task content only; never real Todoist data.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-909",
