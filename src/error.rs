@@ -78,6 +78,10 @@ pub enum AppError {
     /// A user-initiated task action (add/edit/complete/..., EPIC-08) failed.
     #[error("action: {0}")]
     Action(#[from] ActionError),
+
+    /// A project/section/label structure mutation (EPIC-09) failed.
+    #[error("structure: {0}")]
+    Structure(#[from] StructureError),
 }
 
 /// Maps an [`AppError`] to a process exit code for `main`'s one-shot CLI
@@ -685,6 +689,49 @@ pub enum ActionError {
     },
 }
 
+/// Errors from building project/section/label structure mutation commands
+/// (T-802, EPIC-09). Constructors in `src/structure/command.rs` validate
+/// their input and return this error instead of panicking; the
+/// `Unknown*` variants are reserved for later EPIC-09 tasks that resolve
+/// ids against the local cache.
+#[non_exhaustive]
+#[derive(Debug, Error)]
+pub enum StructureError {
+    /// A project/section/label name was empty (or all whitespace) after
+    /// trimming.
+    #[error("name must not be empty")]
+    EmptyName,
+
+    /// A project/section/label name exceeded the accepted length after
+    /// trimming; `len` is the rejected name's character count.
+    #[error("name is too long: {len} characters")]
+    NameTooLong {
+        /// Character count of the rejected (trimmed) name.
+        len: usize,
+    },
+
+    /// A project id did not match any project in the local cache.
+    #[error("unknown project: {id}")]
+    UnknownProject {
+        /// The offending project id.
+        id: String,
+    },
+
+    /// A section id did not match any section in the local cache.
+    #[error("unknown section: {id}")]
+    UnknownSection {
+        /// The offending section id.
+        id: String,
+    },
+
+    /// A label id did not match any label in the local cache.
+    #[error("unknown label: {id}")]
+    UnknownLabel {
+        /// The offending label id.
+        id: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1250,5 +1297,49 @@ mod tests {
         let shown = app.to_string();
         assert!(shown.starts_with("action: "), "got {shown}");
         assert!(shown.contains("not authenticated"), "got {shown}");
+    }
+
+    // -----------------------------------------------------------------
+    // T-802 acceptance: `StructureError` is wrapped as `AppError::Structure`
+    // with the `structure: ` Display prefix (same pattern as the per-epic
+    // prefix tests above).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn app_error_structure_has_structure_prefix_and_from_conversion() {
+        let cases = [
+            (
+                StructureError::EmptyName,
+                "structure: name must not be empty",
+            ),
+            (
+                StructureError::NameTooLong { len: 121 },
+                "structure: name is too long: 121 characters",
+            ),
+            (
+                StructureError::UnknownProject {
+                    id: "p1".to_string(),
+                },
+                "structure: unknown project: p1",
+            ),
+            (
+                StructureError::UnknownSection {
+                    id: "s1".to_string(),
+                },
+                "structure: unknown section: s1",
+            ),
+            (
+                StructureError::UnknownLabel {
+                    id: "l1".to_string(),
+                },
+                "structure: unknown label: l1",
+            ),
+        ];
+        for (err, want) in cases {
+            let app = AppError::from(err);
+            assert!(matches!(app, AppError::Structure(_)), "{want}");
+            assert_eq!(app.to_string(), want);
+            assert!(!format!("{app:?}").contains(FIXTURE_TOKEN), "{want}");
+        }
     }
 }
