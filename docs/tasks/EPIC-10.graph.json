@@ -116,7 +116,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pairs with the EPIC-04 cache reads (planned in parallel): the caller materialises `FilterItem`s from the cache and passes them in. Date-relative predicates (`today`, `overdue`) must use the injected date and the due/deadline shapes already modelled in `src/api/model/common.rs` - reuse those types rather than re-parsing date strings.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-906",
