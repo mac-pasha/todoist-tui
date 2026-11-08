@@ -91,7 +91,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends on the EPIC-04 SQLite cache existing (connection handling, state-dir DB file with 0600 perms, migration runner). Do NOT duplicate that: take a `&rusqlite::Connection`/`&Transaction` as a parameter and let the caller own the connection. Registering this DDL with EPIC-04's migration runner may need a one-line change in the cache module - that file is outside this task's `files`, so stop and ask before touching it. Unit tests use `Connection::open_in_memory()`.",
-      "status": "todo"
+      "status": "review"
     },
     {
       "id": "T-405",
