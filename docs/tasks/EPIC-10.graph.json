@@ -116,7 +116,8 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pairs with the EPIC-04 cache reads (planned in parallel): the caller materialises `FilterItem`s from the cache and passes them in. Date-relative predicates (`today`, `overdue`) must use the injected date and the due/deadline shapes already modelled in `src/api/model/common.rs` - reuse those types rather than re-parsing date strings.",
-      "status": "todo"
+      "status": "blocked",
+      "blocked_reason": "cargo test --all fails on tests/security_perms.rs::preexisting_world_readable_token_is_accepted_and_not_tightened_on_read (assertion at line 190: load must not change the mode). Reproduced on base commit 468ce15 without T-905 changes, so pre-existing and outside task files scope. All filters:: tests (34 in eval, parse) pass; fmt and clippy pass. Human to decide: fix/waive the unrelated test, then set review."
     },
     {
       "id": "T-906",
