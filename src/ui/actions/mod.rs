@@ -15,15 +15,25 @@
 //! `Option<Option<T>>` (clippy's `option_option` lint) to add a third,
 //! explicit "clear" state. A partial edit only needs to carry the fields
 //! that actually changed.
+//!
+//! [`commands`] lands the other half of EPIC-08's write path (T-702):
+//! [`commands::task_action_to_commands`] turns a `TaskAction` into the
+//! Sync API write command(s) (EPIC-05's [`crate::queue::QueuedCommand`]) to
+//! enqueue. Applying the action to the local cache (EPIC-04) is still later
+//! EPIC-08 work.
 
-// No consumers yet: turning a `TaskAction` into a queued command (EPIC-05)
-// and applying it to the local cache (EPIC-04) are later EPIC-08 tasks.
-// `pub` alone does not silence `dead_code` in a binary crate, so allow it
-// at module scope — same pattern as `error.rs` (T-003) and `src/ui/mod.rs`
-// (T-601).
-#![allow(dead_code)]
+// Local-cache application (EPIC-04) is still later EPIC-08 work. `pub`
+// alone does not silence `dead_code` in a binary crate, so allow it at
+// module scope — same pattern as `error.rs` (T-003) and `src/ui/mod.rs`
+// (T-601). `unused_imports` joins for the T-702 re-export, same as
+// `src/queue/mod.rs` (T-403).
+#![allow(dead_code, unused_imports)]
 
 use crate::api::model::{Id, Priority};
+
+pub mod commands;
+
+pub use commands::task_action_to_commands;
 
 /// A single user-initiated task action, queued for execution against the
 /// Todoist Sync API (EPIC-05) and applied optimistically to the local

@@ -47,7 +47,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Reuse the wire types and `RESOURCE_TYPES`-style single-source-of-truth pattern from `src/api/sync.rs` (EPIC-03) rather than hand-rolling JSON. This task builds commands only - it does not enqueue or touch the DB (that is T-703). Serde args are a `HashMap<String, serde_json::Value>` as the sync envelope already expects.",
-      "status": "todo"
+      "status": "in_progress"
     },
     {
       "id": "T-703",
