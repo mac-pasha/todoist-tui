@@ -42,6 +42,10 @@ mod ui;
 /// Filter query parser for the supported grammar subset (T-903, EPIC-10).
 mod filters;
 
+/// Structure command builders for project/section/label mutations
+/// (T-802, EPIC-09).
+mod structure;
+
 use std::process::ExitCode;
 
 use cli::output::Output;
@@ -382,7 +386,8 @@ mod bootstrap_tests {
             // requires `mod auth;`, T-201 requires `mod api;`, T-301
             // requires `mod db;`, T-902 requires `mod search;`, T-402
             // requires `mod queue;`, T-501 requires `mod sync;`, T-601
-            // requires `mod ui;`, T-903 requires `mod filters;`. The only
+            // requires `mod ui;`, T-903 requires `mod filters;`, T-802
+            // requires `mod structure;`. The only
             // other permitted lines are the cfg(test) modules below.
             .filter(|l| {
                 *l != "mod error;"
@@ -397,6 +402,7 @@ mod bootstrap_tests {
                     && *l != "mod sync;"
                     && *l != "mod ui;"
                     && *l != "mod filters;"
+                    && *l != "mod structure;"
                     && !l.starts_with("mod error_tests")
             })
             .map(str::to_string)
