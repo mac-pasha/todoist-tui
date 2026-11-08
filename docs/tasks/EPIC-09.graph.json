@@ -45,7 +45,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pure command construction only - no cache writes, no enqueue, no UI, so the rest of the epic can land in parallel. Follow the error conventions set by `ApiError`/`AuthError` in `src/error.rs` and the module-doc style of `src/api/mod.rs`. Reuse the Sync command/args types and the uuid+temp_id helpers from the write-queue epic (EPIC-05) rather than redefining them; if that type is not merged yet, stop and ask rather than duplicating it. Never touch the `Secret`/`REDACTED` helper in `src/log.rs`.",
-      "status": "in_progress"
+      "status": "review"
     },
     {
       "id": "T-803",
