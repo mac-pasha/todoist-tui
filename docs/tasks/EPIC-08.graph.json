@@ -94,7 +94,8 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Follow the widget + snapshot-test conventions established by the TUI shell epic (EPIC-07) - reuse its theme/style helpers and its buffer-snapshot test helper instead of adding a new snapshot library. Quick-add natural-language parsing is explicitly out of scope (decision D1, lands in EPIC-11).",
-      "status": "todo"
+      "status": "blocked",
+      "blocked_reason": "Hidden deps not encoded in graph: needs T-604 (theme), T-607 (frame layout + snapshot-test helper), and src/ui/mod.rs added to files (pub mod widgets; declaration). Amend graph via sdlc-planner, re-run after EPIC-07 theme/layout tasks done."
     },
     {
       "id": "T-705",
