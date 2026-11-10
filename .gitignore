@@ -1,7 +1,22 @@
-# agentic SDLC harness
+# Agentic SDLC harness & internal planning docs
 .claude/
-.sdlc/reviews/
+.pi/
+.sdlc/
+CLAUDE.md
+docs/
 
 # Rust build artefacts (Cargo.lock stays tracked for reproducible binary builds)
 /target
 **/*.rs.bk
+
+# Secrets, local state & OS metadata
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+.DS_Store

@@ -1,8 +1,0 @@
-{
-  "packages": [
-    "npm:pi-subagents",
-    "npm:omniroute-pi-ext-integration"
-  ],
-  "defaultProvider": "omni",
-  "defaultModel": "sdlc-code"
-}
