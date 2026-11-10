@@ -1,0 +1,115 @@
+{
+  "sync_token": "tok_fake_today_fixture",
+  "full_sync": true,
+  "projects": [
+    {
+      "id": "6X4VfakePrj1",
+      "name": "Inbox",
+      "color": "grey",
+      "child_order": 0,
+      "collapsed": false,
+      "is_deleted": false,
+      "is_archived": false,
+      "is_favorite": false,
+      "view_style": "list"
+    },
+    {
+      "id": "6X4VfakePrj2",
+      "name": "Work",
+      "color": "blue",
+      "child_order": 1,
+      "collapsed": false,
+      "is_deleted": false,
+      "is_archived": false,
+      "is_favorite": true,
+      "view_style": "list"
+    }
+  ],
+  "items": [
+    {
+      "id": "6X4VfakeT001",
+      "user_id": "6X4VfakeUser",
+      "project_id": "6X4VfakePrj2",
+      "content": "Overdue urgent report",
+      "description": "",
+      "priority": 4,
+      "child_order": 1,
+      "checked": false,
+      "is_deleted": false,
+      "labels": ["urgent", "q2"],
+      "due": { "date": "2026-04-15", "is_recurring": false },
+      "added_at": "2026-04-10T08:00:00Z"
+    },
+    {
+      "id": "6X4VfakeT002",
+      "user_id": "6X4VfakeUser",
+      "project_id": "6X4VfakePrj1",
+      "content": "Ship \"today\"\tcli 🚀",
+      "description": "",
+      "priority": 3,
+      "child_order": 2,
+      "checked": false,
+      "is_deleted": false,
+      "labels": ["cli"],
+      "due": { "date": "2026-04-17", "is_recurring": false },
+      "added_at": "2026-04-12T09:00:00Z"
+    },
+    {
+      "id": "6X4VfakeT003",
+      "user_id": "6X4VfakeUser",
+      "project_id": "6X4VfakePrj1",
+      "content": "Morning coffee standup",
+      "description": "",
+      "priority": 1,
+      "child_order": 3,
+      "checked": false,
+      "is_deleted": false,
+      "labels": [],
+      "due": { "date": "2026-04-17T09:00:00", "is_recurring": false },
+      "added_at": "2026-04-16T07:00:00Z"
+    },
+    {
+      "id": "6X4VfakeT004",
+      "user_id": "6X4VfakeUser",
+      "project_id": "6X4VfakePrj2",
+      "content": "Tomorrow planning",
+      "description": "",
+      "priority": 4,
+      "child_order": 4,
+      "checked": false,
+      "is_deleted": false,
+      "labels": [],
+      "due": { "date": "2026-04-18", "is_recurring": false },
+      "added_at": "2026-04-16T10:00:00Z"
+    },
+    {
+      "id": "6X4VfakeT005",
+      "user_id": "6X4VfakeUser",
+      "project_id": "6X4VfakePrj1",
+      "content": "Someday idea",
+      "description": "",
+      "priority": 2,
+      "child_order": 5,
+      "checked": false,
+      "is_deleted": false,
+      "labels": [],
+      "due": null,
+      "added_at": "2026-04-16T11:00:00Z"
+    },
+    {
+      "id": "6X4VfakeT006",
+      "user_id": "6X4VfakeUser",
+      "project_id": "6X4VfakePrj2",
+      "content": "Already completed today",
+      "description": "",
+      "priority": 4,
+      "child_order": 6,
+      "checked": true,
+      "is_deleted": false,
+      "labels": [],
+      "due": { "date": "2026-04-17", "is_recurring": false },
+      "added_at": "2026-04-16T12:00:00Z"
+    }
+  ]
+}
+

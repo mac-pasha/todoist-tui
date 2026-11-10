@@ -12,10 +12,14 @@
 // EPIC-04 tasks add row (de)serialisation here. `pub` alone does not
 // silence `dead_code` in a binary crate, so allow it at module scope —
 // same pattern as `error.rs` (T-003) and `src/api/mod.rs` (T-201).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
+pub mod apply;
 pub mod meta;
 pub mod migrations;
 pub mod open;
+pub mod queries;
 pub mod resources;
 pub mod wipe;
+
+pub use apply::{apply_sync, ApplyStats, ResourceCounts};

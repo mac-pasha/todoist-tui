@@ -10,8 +10,23 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod command;
+pub mod enqueue;
+pub mod flush;
+pub mod recovery;
 pub mod schema;
+pub mod status;
 pub mod store;
+pub mod temp_ids;
 
 pub use command::{CommandState, QueuedCommand};
+pub use enqueue::{enqueue, enqueue_many};
+pub use flush::{build_default_flush_batch, build_flush_batch, DEFAULT_MAX_BATCH};
+pub use recovery::{recover_on_start, MAX_ATTEMPTS, MAX_ATTEMPTS_ERROR};
+pub use status::{
+    apply_sync_status, classify, failed_commands, ErrorClass, FailedCommand, StatusOutcome,
+};
 pub use store::{CommandStateCounts, CommandStore};
+pub use temp_ids::{
+    resolve_command_temp_ids, resolve_temp_ids, rewrite_json_value, rewrite_sqlite_cache_temp_ids,
+    verify_no_temp_ids,
+};

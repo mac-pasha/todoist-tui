@@ -13,6 +13,30 @@
 // render loop and input handling here. `pub` alone does not silence
 // `dead_code` in a binary crate, so allow it at module scope — same pattern
 // as `error.rs` (T-003) and `src/api/mod.rs` (T-201).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 pub mod actions;
+pub mod app;
+pub mod data;
+pub mod filters_view;
+pub mod keymap;
+pub mod model;
+pub mod run;
+pub mod search;
+pub mod session;
+pub mod status;
+pub mod structure;
+pub mod terminal;
+pub mod theme;
+pub mod view;
+pub mod widgets;
+
+pub use app::{App, Pane};
+pub use data::{FixtureData, SqliteViewData, ViewData};
+pub use keymap::{parse_key, render_key, Action, KeyBinding, Keymap};
+pub use model::{
+    Comment, SectionHeader, SidebarKind, SidebarNode, SidebarNodeKind, TaskDetail, TaskRow, ViewId,
+};
+pub use status::{StatusModel, SyncEvent};
+pub use terminal::TerminalGuard;
+pub use theme::{ColorDepth, Theme};

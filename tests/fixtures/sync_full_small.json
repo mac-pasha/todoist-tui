@@ -1,0 +1,70 @@
+{
+  "sync_token": "fakeSyncTokenFull0001",
+  "full_sync": true,
+  "temp_id_mapping": {},
+  "sync_status": {},
+  "user": {
+    "id": "6X4VfakeUsr0001",
+    "full_name": "Ada Example",
+    "email": "ada@example.invalid",
+    "inbox_project_id": "6X4VfakePrj0001"
+  },
+  "projects": [
+    {
+      "id": "6X4VfakePrj0001",
+      "name": "Inbox",
+      "parent_id": null,
+      "child_order": 0,
+      "color": "grey",
+      "is_favorite": false,
+      "is_archived": false,
+      "is_deleted": false,
+      "view_style": "list"
+    }
+  ],
+  "sections": [],
+  "labels": [],
+  "items": [
+    {
+      "id": "6X4VfakeItm0001",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0001",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 1,
+      "content": "Buy oat milk",
+      "description": "",
+      "priority": 1,
+      "labels": [],
+      "due": { "date": "2026-11-10", "is_recurring": false },
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2026-11-01T08:00:00Z",
+      "completed_at": null,
+      "responsible_uid": null
+    },
+    {
+      "id": "6X4VfakeItm0002",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0001",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 2,
+      "content": "Draft the quarterly report",
+      "description": "",
+      "priority": 2,
+      "labels": [],
+      "due": null,
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2026-11-02T08:00:00Z",
+      "completed_at": null,
+      "responsible_uid": null
+    }
+  ],
+  "notes": [],
+  "filters": []
+}
+

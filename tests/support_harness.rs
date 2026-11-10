@@ -253,14 +253,15 @@ fn test_home_is_isolated_holds_the_fake_token_and_is_removed_on_drop() {
 
 #[test]
 fn binary_sees_the_sandboxed_token_file() {
-    // `sync` is still a guarded stub: with a token it reaches
-    // "not implemented", without one it fails the auth guard first. Either
-    // way it proves the binary reads the token from the TestHome sandbox.
+    // `sync` now runs the real command after passing auth guard: with a token
+    // pointing at the closed test port it reports offline, without one it
+    // fails the auth guard first. Either way it proves the binary reads the
+    // token from the TestHome sandbox.
     let with = TestHome::new("http://127.0.0.1:9");
     let out = with.command().arg("sync").output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
-    assert!(err.contains("not implemented: sync"), "{err}");
+    assert!(err.contains("sync failed: offline"), "{err}");
 
     let without = TestHome::without_token("http://127.0.0.1:9");
     let out = without.command().arg("sync").output().unwrap();

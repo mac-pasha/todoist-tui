@@ -22,16 +22,21 @@
 //! The global `--no-color` flag (T-1001) and `NO_COLOR` env var both
 //! disable colour for one-shot subcommand printing through [`output::Output`].
 
+pub mod add;
 pub mod auth;
 pub mod commands;
 pub mod logout;
 pub mod output;
+pub mod sync;
+pub mod today;
+pub mod tui;
 
 use std::path::PathBuf;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-use crate::error::{AppError, Result};
+use crate::config::Config;
+use crate::error::Result;
 
 /// `todoist-tui` command-line interface.
 ///
@@ -86,6 +91,9 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Launch the interactive terminal UI.
+    Tui,
 }
 
 /// Builds the underlying [`clap::Command`] for `todoist-tui`.
@@ -111,21 +119,30 @@ pub fn parse() -> Cli {
     Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit())
 }
 
-/// Dispatches a parsed [`Cli`] to its subcommand implementation.
-///
-/// No subcommand selected routes to the default TUI path, which is itself
-/// not implemented yet.
+/// Dispatches a parsed [`Cli`] using an already-loaded [`Config`].
 ///
 /// # Errors
 ///
-/// Returns whatever the routed implementation returns for `auth`; otherwise
-/// [`AppError::NotImplemented`]: `"tui"` for the default path, or the
-/// subcommand's name for each remaining stub (see [`commands::dispatch`]).
-pub fn run(cli: &Cli) -> Result<()> {
+/// Propagates any error returned by the subcommand or TUI entrypoint.
+pub fn run_with_config(cli: &Cli, config: &Config) -> Result<()> {
     match &cli.command {
-        None => Err(AppError::NotImplemented("tui")),
+        None | Some(Commands::Tui) => tui::run_tui(config),
         Some(command) => commands::dispatch(command),
     }
+}
+
+/// Dispatches a parsed [`Cli`] to its subcommand implementation.
+///
+/// # Errors
+///
+/// Propagates any error returned by the subcommand or TUI entrypoint.
+#[allow(dead_code)]
+pub fn run(cli: &Cli) -> Result<()> {
+    let config = match &cli.config {
+        Some(path) => Config::load_from(path)?,
+        None => Config::load()?,
+    };
+    run_with_config(cli, &config)
 }
 
 /// Sanity check that the derived [`clap::Command`] is internally consistent

@@ -350,9 +350,8 @@ fn auth_against_accepting_mock_exits_zero_and_a_second_run_finds_the_token() {
     );
 
     // Second process: the guard must find the stored token in the file
-    // fallback and never prompt. `today` is still a stub (T-109 keeps it
-    // NotImplemented), so success here means "the guard passed", proven by
-    // the guard's own error being absent.
+    // fallback and never prompt. `today` now executes against the local cache
+    // (exiting 0 with no tasks on a fresh cache), proving the guard passed.
     let today = sandbox.run_plain(&["today"]);
     let today_err = stderr(&today);
     assert!(
@@ -363,16 +362,11 @@ fn auth_against_accepting_mock_exits_zero_and_a_second_run_finds_the_token() {
         !today_err.contains(PROMPT.trim()),
         "a guarded command must never re-prompt for the token: {today_err}"
     );
-    assert!(
-        today_err.contains("not implemented: today"),
-        "with a token stored, `today` reaches its stub body: {today_err}"
-    );
     assert_eq!(
         today.status.code(),
-        Some(1),
-        "the stub body still exits 1: {today_err}"
+        Some(0),
+        "with a token stored, `today` exits 0: {today_err}"
     );
-    assert!(stdout(&today).is_empty(), "the stub writes no stdout");
 }
 
 // ---------------------------------------------------------------------------

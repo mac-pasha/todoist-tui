@@ -111,12 +111,15 @@ pub fn exit_code(error: &AppError) -> i32 {
     /// Fallback code for every failure that is not one of the dedicated
     /// classes below.
     const GENERIC_FAILURE: i32 = 1;
+    /// Dedicated code for CLI usage / argument validation errors.
+    const USAGE: i32 = 2;
     /// Dedicated code for authentication failures.
     const NOT_AUTHENTICATED: i32 = 3;
     /// Dedicated code for offline / transport failures.
     const OFFLINE: i32 = 4;
 
     match error {
+        AppError::Cli(CliError::Usage { .. }) => USAGE,
         AppError::Auth(AuthError::NotAuthenticated) | AppError::Cli(CliError::NotAuthenticated) => {
             NOT_AUTHENTICATED
         }
@@ -612,6 +615,13 @@ pub enum CliError {
     #[error("offline: could not reach the Todoist API")]
     Offline,
 
+    /// Invalid argument or usage error reported by a CLI command handler.
+    #[error("usage: {message}")]
+    Usage {
+        /// Human-readable validation explanation (never carries token data).
+        message: String,
+    },
+
     /// Writing command output (stdout/stderr) failed at the OS level.
     ///
     /// Unlike every other `io::Error`-wrapping variant in this module, the
@@ -641,6 +651,7 @@ impl std::fmt::Debug for CliError {
         match self {
             Self::NotAuthenticated => f.write_str("NotAuthenticated"),
             Self::Offline => f.write_str("Offline"),
+            Self::Usage { message } => f.debug_struct("Usage").field("message", message).finish(),
             Self::Io { .. } => f.write_str("Io { source: <redacted io::Error> }"),
         }
     }
@@ -729,6 +740,13 @@ pub enum StructureError {
     UnknownLabel {
         /// The offending label id.
         id: String,
+    },
+
+    /// A label with the same case-insensitive name already exists.
+    #[error("duplicate label: {name}")]
+    DuplicateLabel {
+        /// The duplicate label name.
+        name: String,
     },
 }
 

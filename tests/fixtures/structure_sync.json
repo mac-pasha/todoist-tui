@@ -1,0 +1,58 @@
+{
+  "sync_token": "tok_struct_1",
+  "full_sync": false,
+  "temp_id_mapping": {
+    "tmp_proj_1": "srv_proj_101",
+    "tmp_sub_1": "srv_proj_102",
+    "tmp_sec_1": "srv_sec_201",
+    "tmp_lbl_1": "srv_lbl_301"
+  },
+  "projects": [
+    {
+      "id": "srv_proj_101",
+      "name": "Roadmap",
+      "parent_id": null,
+      "child_order": 1,
+      "color": "charcoal",
+      "is_favorite": false,
+      "is_archived": false,
+      "is_deleted": false,
+      "view_style": "list"
+    },
+    {
+      "id": "srv_proj_102",
+      "name": "Q4 Milestones",
+      "parent_id": "srv_proj_101",
+      "child_order": 1,
+      "color": "charcoal",
+      "is_favorite": false,
+      "is_archived": false,
+      "is_deleted": false,
+      "view_style": "list"
+    }
+  ],
+  "sections": [
+    {
+      "id": "srv_sec_201",
+      "project_id": "srv_proj_101",
+      "name": "In Progress",
+      "section_order": 1,
+      "is_archived": false,
+      "is_deleted": false
+    }
+  ],
+  "labels": [
+    {
+      "id": "srv_lbl_301",
+      "name": "backend",
+      "color": "charcoal",
+      "item_order": 1,
+      "is_deleted": false,
+      "is_favorite": false
+    }
+  ],
+  "items": [],
+  "notes": [],
+  "filters": []
+}
+

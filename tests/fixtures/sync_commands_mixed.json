@@ -1,0 +1,24 @@
+{
+  "sync_token": "sync_token_mixed_abc123",
+  "full_sync": false,
+  "sync_status": {
+    "c0000000-0000-4000-8000-000000000001": "ok",
+    "c0000000-0000-4000-8000-000000000002": {
+      "error_tag": "ITEM_NOT_FOUND",
+      "error_code": 20,
+      "error": "Item not found",
+      "http_code": 404
+    }
+  },
+  "temp_id_mapping": {
+    "tmp_proj_wave1": "proj_real_999"
+  },
+  "items": [],
+  "projects": [],
+  "sections": [],
+  "labels": [],
+  "filters": [],
+  "reminders": [],
+  "notes": []
+}
+

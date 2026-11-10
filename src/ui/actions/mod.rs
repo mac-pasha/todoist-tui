@@ -31,9 +31,18 @@
 
 use crate::api::model::{Id, Priority};
 
+pub mod add;
 pub mod commands;
+pub mod comment;
+pub mod complete;
+pub mod dispatch;
+pub mod edit;
+pub mod errors;
+pub mod move_task;
+pub mod reorder;
 
 pub use commands::task_action_to_commands;
+pub use dispatch::{dispatch, DispatchResult};
 
 /// A single user-initiated task action, queued for execution against the
 /// Todoist Sync API (EPIC-05) and applied optimistically to the local

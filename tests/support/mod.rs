@@ -20,8 +20,10 @@
 
 #![allow(dead_code, unused_imports)]
 
+pub mod dataset;
 pub mod env;
 pub mod mock_api;
+pub mod sync_fixtures;
 
 pub use env::{TestHome, FAKE_TOKEN};
 pub use mock_api::MockSyncApi;

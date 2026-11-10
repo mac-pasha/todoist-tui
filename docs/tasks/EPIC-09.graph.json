@@ -45,7 +45,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pure command construction only - no cache writes, no enqueue, no UI, so the rest of the epic can land in parallel. Follow the error conventions set by `ApiError`/`AuthError` in `src/error.rs` and the module-doc style of `src/api/mod.rs`. Reuse the Sync command/args types and the uuid+temp_id helpers from the write-queue epic (EPIC-05) rather than redefining them; if that type is not merged yet, stop and ask rather than duplicating it. Never touch the `Secret`/`REDACTED` helper in `src/log.rs`.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-803",
@@ -53,7 +53,10 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-802"
+        "T-802",
+        "T-305",
+        "T-306",
+        "T-405"
       ],
       "files": [
         "src/structure/project.rs",
@@ -70,7 +73,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Mirror the action-layer pattern established for task actions in EPIC-08 (validate -> optimistic apply + enqueue in one transaction -> return). Cache read/write helpers come from the SQLite store epic (EPIC-04); reuse the existing project queries instead of writing raw SQL where a helper already exists. Unit tests for this file are written by sdlc-unit-tester, not by the coder.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-804",
@@ -78,7 +81,10 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-802"
+        "T-802",
+        "T-305",
+        "T-306",
+        "T-405"
       ],
       "files": [
         "src/structure/section.rs",
@@ -94,7 +100,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Ordering fields (`section_order`, `child_order`) follow the semantics stored by the cache epic (EPIC-04); read the existing ordering helpers before adding new ones. Same transaction/enqueue pattern as the task-action layer in EPIC-08.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-805",
@@ -102,7 +108,10 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-802"
+        "T-802",
+        "T-305",
+        "T-306",
+        "T-405"
       ],
       "files": [
         "src/structure/label.rs",
@@ -118,7 +127,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Personal labels only - shared labels and label ordering are out of scope for this epic. Todoist items reference labels by name, so rename has a local fan-out onto items; keep that fan-out in one transaction with the enqueue. Reuse the label/item cache helpers from EPIC-04.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-806",
@@ -143,7 +152,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "This is the risky part of the epic: the local optimistic effect must not diverge from what the next sync delta will bring back. Prefer deleting locally only what the doc proves the server deletes; everything else is left to the incoming delta from EPIC-06. The preview counts feed the delete-confirmation dialog in T-807.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-807",
@@ -151,12 +160,18 @@
       "type": "design",
       "stack": "rust",
       "deps": [
-        "T-802"
+        "T-802",
+        "T-604",
+        "T-607",
+        "T-704",
+        "T-707",
+        "T-806"
       ],
       "files": [
         "src/ui/structure/mod.rs",
         "src/ui/structure/form.rs",
-        "src/ui/structure/confirm.rs"
+        "src/ui/structure/confirm.rs",
+        "src/ui/mod.rs"
       ],
       "acceptance": [
         "Add/rename forms exist for project (name, optional parent project, colour/favourite only if the cache model already carries them), section (name, project) and label (name), reusing the form widget and input-handling conventions introduced by the task-actions epic (EPIC-08) rather than new bespoke widgets",
@@ -168,7 +183,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pure UI layer: produces an intent value, never calls the store directly - dispatch is T-809. Follow the TUI shell conventions from EPIC-07 (theme, 80x24 minimum, overlay rendering) and the form/confirm components from EPIC-08; if those components are not merged yet, stop and ask instead of forking a parallel widget set.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-808",
@@ -177,11 +192,17 @@
       "stack": "rust",
       "deps": [
         "T-803",
-        "T-807"
+        "T-807",
+        "T-608",
+        "T-609"
       ],
       "files": [
         "src/ui/structure/sidebar.rs",
-        "src/ui/structure/mod.rs"
+        "src/ui/structure/mod.rs",
+        "src/ui/mod.rs",
+        "src/ui/view/sidebar.rs",
+        "src/ui/view/task_list.rs",
+        "src/ui/app.rs"
       ],
       "acceptance": [
         "A project created with a parent appears nested one level under that parent in the sidebar immediately after the action, with sibling order matching `child_order`",
@@ -193,7 +214,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Extends the sidebar/tree widget owned by the TUI shell epic (EPIC-07) with the structure-mutation refresh path; keep the changes inside `src/ui/structure/` and call into the shell's tree state rather than rewriting it. If a shell API is missing for selection repair, stop and ask.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-809",
@@ -204,11 +225,19 @@
         "T-803",
         "T-804",
         "T-805",
-        "T-807"
+        "T-807",
+        "T-612",
+        "T-613",
+        "T-711",
+        "T-808"
       ],
       "files": [
         "src/ui/structure/dispatch.rs",
-        "src/ui/structure/mod.rs"
+        "src/ui/structure/mod.rs",
+        "src/ui/mod.rs",
+        "src/ui/keymap.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "Key bindings route sidebar context to the right form: new project / new sub-project / new section / new label, rename, archive (projects only), delete; bindings are read from the config keymap with the documented defaults and are listed in the `?` help overlay",
@@ -220,7 +249,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Thin wiring layer: form intent (T-807) -> action module (T-803/804/805) -> UI refresh (T-808). Reuse the keymap loading and help-overlay registration from EPIC-07 and the error/toast surface from EPIC-08; do not introduce a second error channel.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-810",
@@ -246,7 +275,7 @@
         "Tests use the existing wiremock-based harness rather than hitting the network; `cargo test --all` passes"
       ],
       "context": "Follow the harness and fixture conventions already in `tests/sync_client.rs` and `tests/sync_fixture.rs` (wiremock server, fake token `tok_fake_abc123`). Assert on the serialised request body, not on internal structs, so a serde rename can't silently break the contract.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-811",
@@ -270,7 +299,7 @@
         "`cargo test --all` passes"
       ],
       "context": "Exercises the EPIC-05 queue and EPIC-06 cycle through the structure action layer; reuse their test helpers (store fixture, mock sync server, forced-offline transport) instead of new ones. This is the acceptance bullet 'all of the above work offline and flush without duplicates'.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-812",
@@ -294,7 +323,7 @@
         "No real account data appears in any fixture used by the suite"
       ],
       "context": "Use the headless TUI harness from EPIC-07 (TestBackend + scripted key events + paused mock sync actor). Assert on rendered buffer content, not on internal state, so the test stays honest about what the owner actually sees.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-813",
@@ -318,7 +347,7 @@
         "No tokens, real ids or personal data in the examples"
       ],
       "context": "Follow the structure and tone of `docs/manual/epic-03-sync-api.md`. Docs land after the integration and e2e suites so the documented behaviour is the tested behaviour.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }

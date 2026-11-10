@@ -1,0 +1,3 @@
+6X4VfakeT001	p1	2026-04-15	Work	urgent,q2	Overdue urgent report
+6X4VfakeT002	p2	2026-04-17	Inbox	cli	Ship "today" cli 🚀
+6X4VfakeT003	p4	2026-04-17T09:00:00	Inbox	-	Morning coffee standup

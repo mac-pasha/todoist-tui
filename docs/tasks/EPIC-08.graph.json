@@ -47,7 +47,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Reuse the wire types and `RESOURCE_TYPES`-style single-source-of-truth pattern from `src/api/sync.rs` (EPIC-03) rather than hand-rolling JSON. This task builds commands only - it does not enqueue or touch the DB (that is T-703). Serde args are a `HashMap<String, serde_json::Value>` as the sync envelope already expects.",
-      "status": "in_progress"
+      "status": "done"
     },
     {
       "id": "T-703",
@@ -55,7 +55,10 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-702"
+        "T-702",
+        "T-307",
+        "T-308",
+        "T-405"
       ],
       "files": [
         "src/ui/actions/dispatch.rs",
@@ -71,7 +74,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "This is the single seam every UI action goes through, so keep it UI-free (no ratatui types) and testable headlessly. Reuse the EPIC-05 enqueue + optimistic-apply API and the EPIC-04 store rather than opening your own connection; `temp_id_mapping` resolution is owned by EPIC-05 and must not be reimplemented here. Follow the existing in-memory-store test pattern used by the cache tests.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-704",
@@ -79,11 +82,14 @@
       "type": "design",
       "stack": "rust",
       "deps": [
-        "T-701"
+        "T-701",
+        "T-604",
+        "T-607"
       ],
       "files": [
         "src/ui/widgets/task_form.rs",
-        "src/ui/widgets/mod.rs"
+        "src/ui/widgets/mod.rs",
+        "src/ui/mod.rs"
       ],
       "acceptance": [
         "A `TaskForm` widget renders fields for content, description, project, section, parent, due string, priority and labels, with one focused field at a time",
@@ -94,8 +100,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Follow the widget + snapshot-test conventions established by the TUI shell epic (EPIC-07) - reuse its theme/style helpers and its buffer-snapshot test helper instead of adding a new snapshot library. Quick-add natural-language parsing is explicitly out of scope (decision D1, lands in EPIC-11).",
-      "status": "blocked",
-      "blocked_reason": "Hidden deps not encoded in graph: needs T-604 (theme), T-607 (frame layout + snapshot-test helper), and src/ui/mod.rs added to files (pub mod widgets; declaration). Amend graph via sdlc-planner, re-run after EPIC-07 theme/layout tasks done."
+      "status": "done"
     },
     {
       "id": "T-705",
@@ -104,12 +109,18 @@
       "stack": "rust",
       "deps": [
         "T-703",
-        "T-704"
+        "T-704",
+        "T-606",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/actions/add.rs",
         "src/ui/actions/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/mod.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "A bound key (default `a`) opens the add-task form prefilled with the currently selected view's project/section, and `A` opens it as a sub-task of the selected task",
@@ -119,7 +130,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "The keymap registry and help overlay are owned by EPIC-07; add entries through its registration API so the overlay stays drift-free - do not hardcode key strings in the overlay. If the shell's keymap file lives at a different path on your base branch, stop and ask before touching extra files.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-706",
@@ -128,12 +139,19 @@
       "stack": "rust",
       "deps": [
         "T-703",
-        "T-704"
+        "T-704",
+        "T-606",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/actions/edit.rs",
         "src/ui/actions/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/mod.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs",
+        "src/ui/widgets/task_form.rs"
       ],
       "acceptance": [
         "A bound key (default `e`) opens the task form prefilled from the selected task; the form is reused from T-704 rather than duplicated",
@@ -145,7 +163,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Reuse `TaskForm` in an 'edit' mode; the `Option`-per-field `Edit` payload from T-701 is what keeps 'unchanged' and 'cleared' distinct. Due strings are passed through verbatim to the server (`due.string`); no local natural-language parsing.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-707",
@@ -153,13 +171,21 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-703"
+        "T-703",
+        "T-604",
+        "T-607",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/actions/complete.rs",
         "src/ui/widgets/confirm.rs",
         "src/ui/actions/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/mod.rs",
+        "src/ui/widgets/mod.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "Default binding `x` (or Space) dispatches `Complete` on an open task and `Uncomplete` on a completed one; exactly one command is enqueued per press",
@@ -171,7 +197,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Recurring-task completion while offline is open question 6 in the requirement - implement the simplest behaviour (enqueue `item_complete`, let the server compute the next occurrence, do not fabricate a next due date locally) and document it; do not invent a local recurrence engine.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-708",
@@ -179,13 +205,21 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-703"
+        "T-703",
+        "T-604",
+        "T-607",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/actions/move_task.rs",
         "src/ui/widgets/picker.rs",
         "src/ui/actions/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/mod.rs",
+        "src/ui/widgets/mod.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "Default binding `m` opens a filterable picker listing projects, their sections and (for sub-task moves) candidate parents, read from the cache",
@@ -197,7 +231,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Read destinations through the EPIC-04 cache queries (projects/sections by project, items by parent); do not query the API. Creating new projects/sections from the picker belongs to EPIC-09 and is out of scope here.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-709",
@@ -205,12 +239,18 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-703"
+        "T-703",
+        "T-606",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/actions/reorder.rs",
         "src/ui/actions/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/mod.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "Default bindings `K`/`J` move the selected task up/down within its sibling group; selection follows the moved task",
@@ -222,7 +262,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "`child_order` semantics come from EPIC-03 domain types and the EPIC-04 ordering queries; reuse the existing ordered-read query rather than sorting ad hoc in the UI. Cross-list drag (move + reorder in one gesture) is out of scope - move is T-708.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-710",
@@ -230,13 +270,21 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-703"
+        "T-703",
+        "T-604",
+        "T-607",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/actions/comment.rs",
         "src/ui/widgets/comments.rs",
         "src/ui/actions/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/mod.rs",
+        "src/ui/widgets/mod.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "Default binding `c` opens a comments view for the selected task listing cached notes oldest-first with author and timestamp, scrollable with `j/k`",
@@ -248,7 +296,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Text-only comments; attachments and reactions are explicitly out of scope. Notes are already modelled in `src/api/model/note.rs` and cached by EPIC-04 - read them through the cache.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-711",
@@ -256,13 +304,23 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-703"
+        "T-703",
+        "T-408",
+        "T-611",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/actions/errors.rs",
         "src/ui/widgets/errors_view.rs",
         "src/ui/actions/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/mod.rs",
+        "src/ui/widgets/mod.rs",
+        "src/ui/status.rs",
+        "src/ui/view/status_bar.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "Failed queue commands (EPIC-05 `failed` state) drive a status-bar indicator showing the failure count alongside the existing sync state",
@@ -274,7 +332,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "The status bar itself is owned by the TUI shell epic (EPIC-07) and is fed by EPIC-06 sync-state events - extend its state struct with a failure count through the shell's existing event channel instead of rendering a second status line. Log server error text through the `Secret`-aware logging in `src/log.rs`.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-712",
@@ -304,7 +362,7 @@
         "`cargo test --all` passes"
       ],
       "context": "Follow the existing integration-test style in `tests/` (EPIC-02's `tests/auth_cli.rs` and the EPIC-03 API tests) - mock HTTP server, temp dirs, no real network. Drive the TUI through the shell's headless test harness (EPIC-07) with a fixed-size test backend rather than spawning a real terminal.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-713",
@@ -326,7 +384,7 @@
         "`cargo test --all` passes"
       ],
       "context": "Restart means tearing down and recreating the app over the same state dir, not spawning a subprocess, unless the shell epic already provides a binary-level harness. Reuse the fixtures from T-712 rather than duplicating them.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-714",
@@ -348,7 +406,7 @@
         "Follows the structure of the existing `docs/manual/epic-02-auth-checks.md` and `docs/manual/epic-03-sync-api.md`"
       ],
       "context": "Docs only - no code changes. The recurring-offline note is a hard acceptance item of the epic ('behaviour must be documented in the help/docs whichever way it is decided'), so it must match what T-707 actually implements.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }

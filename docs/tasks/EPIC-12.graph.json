@@ -33,7 +33,9 @@
       "type": "test-int",
       "stack": "rust",
       "deps": [
-        "T-1101"
+        "T-1101",
+        "T-1002",
+        "T-1004"
       ],
       "files": [
         "tests/offline_online_cycle.rs",
@@ -50,7 +52,7 @@
         "`cargo test --all` passes"
       ],
       "context": "This is the acceptance-critical suite of the epic ('full offline→online cycle'). It depends in prose on EPIC-05 (queue), EPIC-06 (sync cycle) and EPIC-11 (non-interactive CLI entry points) being merged - prefer driving the CLI commands (`add`, `sync`) so the test stays decoupled from internal module paths. Keep fixtures small (a handful of projects/items) and free of real account data.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1103",
@@ -58,7 +60,9 @@
       "type": "test-int",
       "stack": "rust",
       "deps": [
-        "T-1101"
+        "T-1101",
+        "T-613",
+        "T-510"
       ],
       "files": [
         "tests/support/dataset.rs",
@@ -74,7 +78,7 @@
         "`cargo clippy --all-targets -- -D warnings` passes"
       ],
       "context": "Depends in prose on EPIC-08/09 (rendering) for the render path and EPIC-06 for the sync cycle. Timing in CI is noisy: measure medians/p95 over repeats, warm up once before measuring, and avoid asserting on a single sample. Reuse `MockSyncApi` from T-1101 for the request-latency gate.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1104",
@@ -82,7 +86,9 @@
       "type": "test-int",
       "stack": "rust",
       "deps": [
-        "T-1101"
+        "T-1101",
+        "T-1002",
+        "T-1004"
       ],
       "files": [
         "tests/security_log_scan.rs"
@@ -96,7 +102,7 @@
         "`cargo test --all` passes"
       ],
       "context": "Epic acceptance: 'automated test greps the generated log file for the test token and asserts zero occurrences'. The `Secret<T>` helper and `REDACTED` marker in `src/log.rs` must not be modified (CLAUDE.md hard rule) - this test only observes them. Use only fake credentials.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1105",
@@ -119,7 +125,7 @@
         "`cargo test --all` passes"
       ],
       "context": "`InsecureBaseUrl` already exists in `ApiError` (see `src/error.rs`, EPIC-03). The permission expectations come from REQ-001 security requirements. Pure test task - if the code does not yet enforce 0600, stop and report rather than editing production files. BLOCKED ON T-1114: the two `#[ignore = \"BUG T-1105: ...\"]` tests and the world-readable-token contract test cannot be un-ignored/re-pinned until T-1114 lands the production fix (0700 parent dirs, tighten-on-load); after T-1114 merges, re-run this task to un-ignore them and re-verify the two flagged acceptance gaps.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-1106",
@@ -127,7 +133,9 @@
       "type": "test-e2e",
       "stack": "rust",
       "deps": [
-        "T-1101"
+        "T-1101",
+        "T-1002",
+        "T-1004"
       ],
       "files": [
         "tests/e2e_logout_fresh_start.rs"
@@ -141,7 +149,7 @@
         "`cargo test --all` passes"
       ],
       "context": "Builds on the existing `src/auth/cache_wipe.rs` / `src/cli/logout.rs` from EPIC-02. Epic acceptance explicitly requires this verified both manually (T-1112) and in an integration test. Drive the real binary via `assert_cmd` so the test covers wiring, not internals.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1107",
@@ -167,7 +175,7 @@
         "The commands remain identical to the ones documented in CLAUDE.md for fmt/clippy/test"
       ],
       "context": "Workflow-only change; no Rust source edits. Keep the existing job names so branch protection rules do not break. The deliberate-regression proof required by the epic acceptance is recorded separately in T-1113.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1108",
@@ -239,7 +247,17 @@
       "type": "test-int",
       "stack": "rust",
       "deps": [
-        "T-1110"
+        "T-1110",
+        "T-603",
+        "T-705",
+        "T-706",
+        "T-707",
+        "T-708",
+        "T-709",
+        "T-710",
+        "T-711",
+        "T-809",
+        "T-907"
       ],
       "files": [
         "tests/docs_sync.rs"
@@ -252,7 +270,7 @@
         "`cargo test --all` passes"
       ],
       "context": "Epic acceptance requires 'a test/script asserts the documented keymap matches the code's default keymap'. Depends in prose on EPIC-08/09 exposing the default keymap as iterable data; if it is not iterable, stop and report rather than editing TUI source from this task. Read README.md via `CARGO_MANIFEST_DIR` so the test works from any cwd.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1112",
@@ -296,7 +314,7 @@
         "Links from README.md install section to the runbook are valid relative paths"
       ],
       "context": "Closes the epic acceptance items 'a deliberate regression in any gate fails the build (verified once)' and the CHANGELOG deliverable. Documentation only. Homebrew/AUR packaging stays out of scope and should be listed as a future item in the runbook.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1114",

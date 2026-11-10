@@ -116,7 +116,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pairs with the EPIC-04 cache reads (planned in parallel): the caller materialises `FilterItem`s from the cache and passes them in. Date-relative predicates (`today`, `overdue`) must use the injected date and the due/deadline shapes already modelled in `src/api/model/common.rs` - reuse those types rather than re-parsing date strings.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-906",
@@ -148,12 +148,18 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-906"
+        "T-906",
+        "T-606",
+        "T-607",
+        "T-612",
+        "T-613"
       ],
       "files": [
         "src/ui/search.rs",
         "src/ui/mod.rs",
-        "src/ui/keymap.rs"
+        "src/ui/keymap.rs",
+        "src/ui/app.rs",
+        "src/ui/view/mod.rs"
       ],
       "acceptance": [
         "Pressing `/` opens a one-line search prompt and the task list is replaced by the ranked results list, updating on every keystroke",
@@ -165,7 +171,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends on the EPIC-07 TUI shell, which is planned in parallel and not merged yet - the exact module names under `src/ui/` must follow whatever EPIC-07 lands; if they differ, stop and ask rather than inventing a parallel UI structure. EPIC-07 only binds `/` to open the prompt; all matching behaviour belongs here. Reuse EPIC-07's existing buffer-snapshot test helpers rather than adding new ones.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-912",
@@ -210,7 +216,7 @@
         "`cargo test --all` passes"
       ],
       "context": "The epic's acceptance demands <16ms per keystroke at 5k items. Existing integration tests live in `tests/` (see `tests/sync_client.rs`) - follow their layout and the fixture conventions in `tests/fixtures/`. Use fake task content only; never real Todoist data.",
-      "status": "review"
+      "status": "done"
     },
     {
       "id": "T-909",
@@ -219,12 +225,20 @@
       "stack": "rust",
       "deps": [
         "T-905",
-        "T-907"
+        "T-907",
+        "T-608",
+        "T-613",
+        "T-705",
+        "T-707"
       ],
       "files": [
         "src/ui/filters_view.rs",
         "src/ui/sidebar.rs",
-        "src/ui/mod.rs"
+        "src/ui/mod.rs",
+        "src/ui/view/sidebar.rs",
+        "src/ui/view/mod.rs",
+        "src/ui/app.rs",
+        "src/ui/keymap.rs"
       ],
       "acceptance": [
         "Sidebar renders a `Filters` section listing the saved filters from the cache, ordered by the filter resource's order field, with deleted filters hidden",
@@ -236,7 +250,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends on the EPIC-07 sidebar (planned in parallel; it reserves a Filters slot) and on the EPIC-04 cache reads for the `filters` resource modelled in `src/api/model/filter.rs`. Creating or editing filters is explicitly out of scope. If EPIC-07's final sidebar module name differs from `src/ui/sidebar.rs`, stop and ask.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-910",
@@ -263,7 +277,7 @@
         "`cargo test --all` passes"
       ],
       "context": "Follow the integration-test conventions already in `tests/` (`tests/sync_client.rs`, `tests/sync_fixture.rs`) and the JSON fixture style of `tests/fixtures/sync_full.json`. These tests sit on top of EPIC-04's cache and EPIC-07's app harness; use their test helpers rather than duplicating setup.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-911",
@@ -286,7 +300,7 @@
         "All key bindings mentioned match the keymap registered in T-907 (no drift); `cargo test --all` still passes"
       ],
       "context": "Match the tone and structure of the existing `docs/manual/epic-02-auth-checks.md` and `docs/manual/epic-03-sync-api.md`. Documentation only - no code changes.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }

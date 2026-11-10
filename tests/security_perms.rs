@@ -12,12 +12,11 @@
 //!   (`db::open_at` chmods the file *before* enabling WAL, so SQLite creates
 //!   the siblings with the same owner-only mode).
 //! * File-backed token written by `auth`: `0600`.
-//! * Pre-existing world-readable token file: **`load` neither tightens nor
-//!   rejects it** (a guarded command still finds the token and the mode is
-//!   left as-is); **`store` (re-running `auth`) tightens it to `0600`**.
-//! * Parent directories `0700`: NOT enforced by production code
-//!   (`create_dir_all` with the process umask). Covered by `#[ignore]`d
-//!   tests that fail today; see the T-1105 report.
+//! * Pre-existing world-readable token file: **`load` tightens it to `0600`
+//!   in place before reading** (upgrade compatibility per T-1114) and
+//!   **`store` (re-running `auth`) also tightens/replaces it at `0600`**.
+//! * Parent directories (`config_dir` and `state_dir`): enforced at `0700`
+//!   by `ensure_config_dir` / `ensure_state_dir` (T-1114).
 
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -167,13 +166,11 @@ async fn auth_writes_the_file_backed_token_as_0600() {
     assert_eq!(mode(&home.token_file()), 0o600, "token file mode");
 }
 
-/// CONTRACT (pinned): a pre-existing world-readable token file is neither
-/// rejected nor tightened on *read*; the guarded command accepts the token
-/// and leaves the mode alone. Tightening happens only when the token is
-/// re-stored (next test). If production changes to tighten/reject on load,
-/// this test must be updated deliberately.
+/// CONTRACT (pinned): a pre-existing world-readable token file is tightened
+/// to `0600` in place on *read* (`FileTokenSource::load`, T-1114) and accepted
+/// so upgrading users with a legacy loose-mode token file keep working safely.
 #[test]
-fn preexisting_world_readable_token_is_accepted_and_not_tightened_on_read() {
+fn preexisting_world_readable_token_is_accepted_and_tightened_to_0600_on_read() {
     let _env = ENV_MUTEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -187,7 +184,7 @@ fn preexisting_world_readable_token_is_accepted_and_not_tightened_on_read() {
         !stderr.contains("not authenticated") && !stderr.to_lowercase().contains("permission"),
         "token must be found, not rejected; stderr: {stderr}"
     );
-    assert_eq!(mode(&token), 0o644, "load must not change the mode");
+    assert_eq!(mode(&token), 0o600, "load must tighten the mode to 0600");
 }
 
 /// CONTRACT (pinned): re-running `auth` over a world-readable token file
@@ -211,10 +208,8 @@ async fn auth_retightens_a_preexisting_world_readable_token_file() {
     assert_eq!(mode(&token), 0o600);
 }
 
-/// Parent directories must be 0700 (REQ-001 security). NOT enforced today:
-/// `ensure_state_dir`/`FileTokenSource::store` use plain `create_dir_all`.
+/// Parent directories must be 0700 (REQ-001 security, enforced by T-1114).
 #[test]
-#[ignore = "BUG T-1105: state dir is created with umask default (0755), not 0700"]
 fn cache_db_parent_dir_is_mode_0700() {
     let _env = ENV_MUTEX
         .lock()
@@ -225,7 +220,6 @@ fn cache_db_parent_dir_is_mode_0700() {
 }
 
 #[tokio::test]
-#[ignore = "BUG T-1105: config dir is created with umask default (0755), not 0700"]
 async fn token_parent_dir_is_mode_0700() {
     let api = MockSyncApi::full_sync().await;
     let _env = ENV_MUTEX

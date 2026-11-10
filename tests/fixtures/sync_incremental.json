@@ -1,0 +1,91 @@
+{
+  "_fixture": {
+    "api": "POST /api/v1/sync",
+    "shape_captured": "2026-10-29",
+    "note": "Hand-written fake incremental Sync API response for EPIC-04 / T-310. Designed to be applied immediately after tests/fixtures/sync_full.json: updates item 6X4VfakeItm0001, marks item 6X4VfakeItm0002 as is_deleted: true, and adds new item 6X4VfakeItm0005 in project 6X4VfakePrj0001. All ids start with '6X4Vfake' and the sync token starts with 'fake' - no real account, token, email or personal data appears in this file."
+  },
+  "sync_token": "fakeSyncTokenIncremental0002",
+  "full_sync": false,
+  "temp_id_mapping": {},
+  "sync_status": {},
+  "items": [
+    {
+      "id": "6X4VfakeItm0001",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0001",
+      "section_id": "6X4VfakeSec0001",
+      "parent_id": null,
+      "child_order": 1,
+      "content": "Buy oat milk (updated)",
+      "description": "Three cartons, barista edition",
+      "priority": 3,
+      "labels": ["errand", "home"],
+      "due": {
+        "date": "2024-05-06",
+        "string": "every Monday",
+        "lang": "en",
+        "is_recurring": true,
+        "timezone": null
+      },
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2024-04-28T08:15:00Z",
+      "completed_at": null,
+      "responsible_uid": null
+    },
+    {
+      "id": "6X4VfakeItm0002",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0001",
+      "section_id": null,
+      "parent_id": "6X4VfakeItm0001",
+      "child_order": 2,
+      "content": "Draft the quarterly report",
+      "description": "",
+      "priority": 2,
+      "labels": [],
+      "due": {
+        "date": "2024-05-20T17:00:00Z",
+        "string": "May 20 5pm",
+        "lang": "en",
+        "is_recurring": false,
+        "timezone": "Europe/Lisbon"
+      },
+      "deadline": {
+        "date": "2024-06-15",
+        "lang": "en"
+      },
+      "checked": false,
+      "is_deleted": true,
+      "added_at": "2024-04-30T11:05:00Z",
+      "completed_at": null,
+      "responsible_uid": "6X4VfakeUsr0002"
+    },
+    {
+      "id": "6X4VfakeItm0005",
+      "user_id": "6X4VfakeUsr0001",
+      "project_id": "6X4VfakePrj0001",
+      "section_id": "6X4VfakeSec0001",
+      "parent_id": null,
+      "child_order": 3,
+      "content": "Pick up dry cleaning",
+      "description": "Ticket on kitchen counter",
+      "priority": 2,
+      "labels": ["errand"],
+      "due": {
+        "date": "2024-05-06",
+        "string": "May 6",
+        "lang": "en",
+        "is_recurring": false,
+        "timezone": null
+      },
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2024-05-02T10:00:00Z",
+      "completed_at": null,
+      "responsible_uid": null
+    }
+  ]
+}

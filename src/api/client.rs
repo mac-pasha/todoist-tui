@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
 
+use crate::api::model::Item;
 use crate::api::retry::{retry, RetryPolicy, Sleeper, TokioSleeper};
 use crate::api::sync::{SyncRequest, SyncResponse};
 use crate::auth::Token;
@@ -151,11 +152,39 @@ impl<C: Sleeper> SyncClient<C> {
                 .send()
                 .await
                 .map_err(|source| ApiError::Transport { source })?;
-            map_response(response).await
+            map_response_json::<SyncResponse>(response).await
         })
         .await?;
 
         Ok(response)
+    }
+
+    /// Submits a server-side quick-add task (`POST /api/v1/tasks/quick`)
+    /// forwarding `text` verbatim (`REQ-001` D1, `T-1003`).
+    ///
+    /// Makes exactly one HTTP request and returns [`ApiError::Transport`]
+    /// directly on connection/timeout failure so offline callers can enqueue
+    /// durably without waiting for a retry budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ApiError::Transport`], [`ApiError::Unauthorized`],
+    /// [`ApiError::RateLimited`], [`ApiError::Server`], or [`ApiError::Decode`].
+    pub async fn quick_add(&self, text: &str) -> Result<Item> {
+        let url = format!("{}/api/v1/tasks/quick", self.base_url);
+        let body = serde_json::json!({ "text": text });
+
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(self.token.expose())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|source| ApiError::Transport { source })?;
+
+        let item = map_response_json::<Item>(response).await?;
+        Ok(item)
     }
 }
 
@@ -169,9 +198,11 @@ impl<C: Sleeper> fmt::Debug for SyncClient<C> {
     }
 }
 
-/// Maps a raw HTTP response to a [`SyncResponse`] or [`ApiError`],
+/// Maps a raw HTTP response to a parsed `T` or [`ApiError`],
 /// consuming the response (needed to read the body on the success path).
-async fn map_response(response: reqwest::Response) -> std::result::Result<SyncResponse, ApiError> {
+async fn map_response_json<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> std::result::Result<T, ApiError> {
     let status = response.status();
     match status {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(ApiError::Unauthorized),
@@ -183,13 +214,18 @@ async fn map_response(response: reqwest::Response) -> std::result::Result<SyncRe
             status: status.as_u16(),
         }),
         status if status.is_success() => response
-            .json::<SyncResponse>()
+            .json::<T>()
             .await
             .map_err(|source| ApiError::Decode { source }),
         status => Err(ApiError::Server {
             status: status.as_u16(),
         }),
     }
+}
+
+#[cfg(test)]
+async fn map_response(response: reqwest::Response) -> std::result::Result<SyncResponse, ApiError> {
+    map_response_json::<SyncResponse>(response).await
 }
 
 /// Parses the `Retry-After` header in its delta-seconds form (a plain

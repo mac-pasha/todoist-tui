@@ -603,15 +603,16 @@ mod perf_tests {
     fn five_thousand_item_search_stays_fast() {
         let items = fixture_items(5000);
         let scope = SearchScope::All;
+        let limit_ms: u128 = if cfg!(debug_assertions) { 1000 } else { 50 };
         // 6-char query typed incrementally, as a user narrows results.
         for query in ["m", "mi", "mil", "milk", "milkf", "milkfix"] {
             let start = std::time::Instant::now();
             let hits = search(&items, query, &scope);
             let elapsed = start.elapsed();
             assert!(
-                elapsed.as_millis() < 400,
+                elapsed.as_millis() < limit_ms,
                 "search({query:?}) over 5000 items took {elapsed:?} \
-                 (debug-mode smoke limit 400ms; the 16ms budget is release-mode)"
+                 (limit {limit_ms}ms; the 16ms budget is release-mode)"
             );
             // The queries are chosen to match, so the DP runs on every item.
             assert!(

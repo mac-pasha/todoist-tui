@@ -1,12 +1,20 @@
-//! Sync engine scaffold (T-501, EPIC-06).
-//!
-//! This task only lands the error vocabulary (`SyncError` in
-//! `src/error.rs`) and this module scaffold; the engine itself (sync-token
-//! bookkeeping, queue draining, reconciliation with the local store) arrives
-//! in later EPIC-06 tasks so the rest of the epic can land in parallel.
+//! Sync engine orchestration (background, offline, conflict policy) (EPIC-06).
 
-// No consumers yet: later EPIC-06 tasks add the sync engine here. `pub`
-// alone does not silence `dead_code` in a binary crate, so allow it at
-// module scope — same pattern as `error.rs` (T-003) and `src/api/mod.rs`
-// (T-201).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
+
+pub mod conflict;
+pub mod cycle;
+pub mod engine;
+pub mod fakes;
+pub mod handle;
+pub mod lag;
+pub mod offline;
+pub mod ports;
+pub mod state;
+
+pub use cycle::{CycleOutcome, SyncCycle, CYCLE_FLUSH_BATCH_LIMIT};
+pub use engine::SyncEngine;
+pub use handle::{Receiver, SyncDriver, SyncHandle, SyncStateReceiver};
+pub use offline::{OfflineTracker, DEFAULT_MAX_OFFLINE_BACKOFF};
+pub use ports::{BoxFuture, Cache, QueueStatusSummary, SqliteSyncStore, SyncApi, WriteQueue};
+pub use state::{SyncState, SyncStatus, SyncTimestamp};

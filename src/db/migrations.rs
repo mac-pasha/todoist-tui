@@ -19,6 +19,22 @@ use crate::error::{DbError, Result};
 /// Base schema: all tables and indices needed by the read queries (T-303).
 const SCHEMA_V1: &str = include_str!("schema.sql");
 
+/// Offline command queue schema: `commands` table and `(state, created_at)` index (T-404/T-405).
+const SCHEMA_V2: &str = "
+CREATE TABLE IF NOT EXISTS commands (
+    uuid TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    args TEXT NOT NULL,
+    temp_id TEXT NULL,
+    state TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    error TEXT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_commands_state_created ON commands (state, created_at);
+";
+
 /// Highest schema version this build knows how to read or migrate to.
 ///
 /// A database whose `user_version` exceeds this (e.g. written by a newer
@@ -37,7 +53,7 @@ pub const SCHEMA_VERSION: i32 = MIGRATIONS.len() as i32;
 /// is always `i + 1`. Appending a new `&str` here (e.g. EPIC-05's
 /// `commands` table) adds migration `MIGRATIONS.len()` without touching
 /// [`run`].
-const MIGRATIONS: &[&str] = &[SCHEMA_V1];
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
 
 /// Applies every migration not yet reflected in `conn`'s `PRAGMA
 /// user_version`, each inside its own transaction, and returns the
@@ -149,6 +165,7 @@ mod tests {
             "user",
             "day_orders",
             "meta",
+            "commands",
         ] {
             assert!(names.contains(&table.to_string()), "missing table {table}");
         }
@@ -158,6 +175,7 @@ mod tests {
             "idx_items_parent_order",
             "idx_items_due_date",
             "idx_items_checked",
+            "idx_commands_state_created",
         ] {
             assert!(names.contains(&index.to_string()), "missing index {index}");
         }
@@ -227,6 +245,7 @@ mod tests {
         assert_eq!(
             tables,
             [
+                "commands",
                 "day_orders",
                 "filters",
                 "items",
@@ -239,7 +258,7 @@ mod tests {
             ]
         );
         let indices = objs.iter().filter(|(t, _)| t == "index").count();
-        assert_eq!(indices, 5);
+        assert_eq!(indices, 6);
     }
 
     #[test]
@@ -264,6 +283,7 @@ mod tests {
         assert_eq!(cols("idx_items_parent_order"), ["parent_id", "child_order"]);
         assert_eq!(cols("idx_items_due_date"), ["due_date"]);
         assert_eq!(cols("idx_items_checked"), ["checked"]);
+        assert_eq!(cols("idx_commands_state_created"), ["state", "created_at"]);
     }
 
     #[test]

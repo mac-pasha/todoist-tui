@@ -17,26 +17,39 @@
 use crate::auth::TokenStore;
 use crate::cli::auth::run_auth;
 use crate::cli::logout::run_logout;
+use crate::cli::today::run_today_default;
 use crate::cli::Commands;
+#[allow(unused_imports)]
 use crate::error::{AppError, Result};
 
 /// Routes a parsed subcommand to its implementation.
 ///
 /// # Errors
 ///
-/// Returns whatever the routed implementation returns for `auth`/`logout`;
-/// `sync`/`add`/`today` return [`crate::error::AuthError::NotAuthenticated`]
+/// Returns whatever the routed implementation returns for `auth`/`logout`/`today`;
+/// `sync`/`add` return [`crate::error::AuthError::NotAuthenticated`]
 /// (via [`require_auth`]) when no token is stored, otherwise
 /// [`AppError::NotImplemented`] with the subcommand's name.
 pub fn dispatch(command: &Commands) -> Result<()> {
     match command {
         Commands::Auth => run_auth(),
         Commands::Logout => run_logout(),
-        Commands::Sync => guarded_stub(&TokenStore::resolve()?, "sync"),
-        // `text` is intentionally unused: this task only captures the quick-add
-        // argument on the CLI surface, EPIC-11 parses it.
-        Commands::Add { text: _ } => guarded_stub(&TokenStore::resolve()?, "add"),
-        Commands::Today { json: _ } => guarded_stub(&TokenStore::resolve()?, "today"),
+        Commands::Sync => {
+            require_auth(&TokenStore::resolve()?)?;
+            crate::cli::sync::run_sync(None, false)
+        }
+        Commands::Add { text } => {
+            require_auth(&TokenStore::resolve()?)?;
+            crate::cli::add::run_add(None, text, false)
+        }
+        Commands::Today { json } => {
+            require_auth(&TokenStore::resolve()?)?;
+            run_today_default(*json)
+        }
+        Commands::Tui => {
+            let config = crate::config::Config::load()?;
+            crate::cli::tui::run_tui(&config)
+        }
     }
 }
 
@@ -68,6 +81,7 @@ fn require_auth(store: &TokenStore) -> Result<()> {
 ///
 /// Returns [`require_auth`]'s error when no token is stored, otherwise
 /// [`AppError::NotImplemented(name)`].
+#[cfg(test)]
 fn guarded_stub(store: &TokenStore, name: &'static str) -> Result<()> {
     require_auth(store)?;
     Err(AppError::NotImplemented(name))
@@ -560,8 +574,8 @@ mod unit_tests {
                 .unwrap_or(rest.len());
             let route = &rest[..route_end];
             assert!(
-                route.contains("guarded_stub("),
-                "{arm} must route through guarded_stub, got: {route:?}"
+                route.contains("guarded_stub(") || route.contains("require_auth("),
+                "{arm} must route through guarded_stub or require_auth, got: {route:?}"
             );
             assert!(
                 route.contains("TokenStore::resolve()"),
@@ -569,9 +583,9 @@ mod unit_tests {
             );
         }
         assert_eq!(
-            body.matches("guarded_stub(").count(),
+            body.matches("guarded_stub(").count() + body.matches("require_auth(").count(),
             ARMS.len(),
-            "exactly one guarded_stub call per stub arm: {body}"
+            "exactly one guard call per guarded arm: {body}"
         );
     }
 

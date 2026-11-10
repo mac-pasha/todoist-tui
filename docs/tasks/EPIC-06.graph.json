@@ -46,7 +46,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pure types + transition logic, no tokio and no IO, so it can be unit-tested without fakes. EPIC-07 renders these events; keep the enum small and serialisation-free. Timestamp type: use whatever date/time type the EPIC-03 model layer already pulls in (`src/api/model/common.rs`) rather than adding a new dependency.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-503",
@@ -54,7 +54,11 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-501"
+        "T-501",
+        "T-307",
+        "T-308",
+        "T-408",
+        "T-409"
       ],
       "files": [
         "src/sync/ports.rs",
@@ -70,7 +74,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "This task is the seam that decouples EPIC-06 from the in-flight EPIC-04 cache and EPIC-05 write queue: the engine talks only to these traits, and the real adapters are wired in T-510 once those epics land. Model the trait method shapes on `SyncRequest`/`SyncResponse` in `src/api/sync.rs` (`sync_token`, `full_sync`, `temp_id_mapping`, `sync_status`, `full_sync_date_utc`). Do not implement storage or queue semantics here.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-504",
@@ -93,7 +97,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Channels only, no cycle logic - the UI side of the contract (EPIC-07 holds a `SyncHandle`). Use `tokio::sync` primitives already available via the `tokio` dependency in `Cargo.toml` (enable only the `sync` feature if it is missing; do not touch `Cargo.lock` pins beyond that).",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-505",
@@ -108,7 +112,7 @@
         "src/sync/mod.rs"
       ],
       "acceptance": [
-        "`SyncCycle::run_once()` reads the token from the `Cache` port: `None` → request built with `SyncRequest::full()` (`sync_token: \"*\"`), `Some(t)` → `SyncRequest::incremental(t)`",
+        "`SyncCycle::run_once()` reads the token from the `Cache` port: `None` \u2192 request built with `SyncRequest::full()` (`sync_token: \"*\"`), `Some(t)` \u2192 `SyncRequest::incremental(t)`",
         "With a fake cache holding no token, exactly one API call is made and its body carries `sync_token: \"*\"` (asserted against the recorded request)",
         "After a successful response the new `sync_token` is persisted through the `Cache` port before the cycle returns; a second `run_once()` uses that token",
         "A response with `full_sync: true` is applied with replace semantics and `full_sync: false` with delta semantics, passed through to `Cache::apply_response` with the flag intact (asserted on the fake)",
@@ -116,7 +120,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pull half of the cycle only; the flush half lands in T-506. Reuse the existing constructors `SyncRequest::full()` / `SyncRequest::incremental()` in `src/api/sync.rs` rather than hand-building request bodies, and let the EPIC-03 retry policy in `src/api/retry.rs` handle in-request retries - the engine must not add its own per-request retry loop.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-506",
@@ -140,7 +144,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends on the EPIC-05 write queue existing behind the `WriteQueue` port from T-503 - do not reach into EPIC-05 internals or re-implement idempotency/uuid handling here; the engine only sequences the calls. Scope note: this task is pure orchestration inside `cycle.rs`, no new modules.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-507",
@@ -153,19 +157,22 @@
       "files": [
         "src/sync/conflict.rs",
         "src/sync/cycle.rs",
-        "src/sync/mod.rs"
+        "src/sync/mod.rs",
+        "src/sync/ports.rs",
+        "src/sync/fakes.rs"
       ],
       "acceptance": [
         "After the server response is applied to the cache, any command still `pending` in the queue is re-applied optimistically on top, so the local value wins for fields the user changed while offline/in-flight",
-        "Unit test: item X has remote content `\"remote\"` in the pulled response and a pending local `item_update` setting `\"local\"` → cache ends the cycle with `\"local\"`",
-        "Unit test: item X changed remotely only (no pending command touching X) → cache ends the cycle with the remote value",
+        "Unit test: item X has remote content `\"remote\"` in the pulled response and a pending local `item_update` setting `\"local\"` \u2192 cache ends the cycle with `\"local\"`",
+        "Unit test: item X changed remotely only (no pending command touching X) \u2192 cache ends the cycle with the remote value",
         "Commands that were acknowledged `ok` in this cycle's `sync_status` are not replayed (unit test asserts no double-apply)",
         "Replay is scoped to the resources present in the response - a pending command for an untouched resource triggers no cache write (unit test asserts the fake cache call count)",
         "The policy is documented in module docs with an explicit `FR-18` reference",
-        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
+        "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass",
+        "Unit test (REQ-001 D2 cross-field conflict): item X has a remote update changing `due` and a pending local `item_update` changing `content` -> both edits survive in the cache after the cycle"
       ],
       "context": "Replay uses the EPIC-05 optimistic-apply path through the `WriteQueue`/`Cache` ports; EPIC-06 owns the *policy* (when to replay), EPIC-05 owns the per-command semantics. Keep the decision logic in `conflict.rs` and call it from the end of `cycle.rs::run_once`.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-508",
@@ -182,14 +189,14 @@
       ],
       "acceptance": [
         "A helper parses `full_sync_date_utc` from the response and compares it to the current clock through an injected clock trait (no `SystemTime::now()` inside the logic)",
-        "`full_sync: true` with `full_sync_date_utc` older than the lag threshold (constant, documented, default 5 minutes) → the cycle immediately runs one extra incremental sync with the freshly stored token (unit test asserts exactly 2 API calls, second one incremental)",
-        "`full_sync_date_utc` within the threshold → exactly 1 API call (unit test)",
+        "`full_sync: true` with `full_sync_date_utc` older than the lag threshold (constant, documented, default 5 minutes) \u2192 the cycle immediately runs one extra incremental sync with the freshly stored token (unit test asserts exactly 2 API calls, second one incremental)",
+        "`full_sync_date_utc` within the threshold \u2192 exactly 1 API call (unit test)",
         "Missing or unparseable `full_sync_date_utc` is treated as no lag and logged at debug level, never an error (unit test)",
         "The follow-up incremental never recurses: at most one extra sync per cycle, even if the follow-up response also reports lag (unit test)",
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "`SyncResponse::full_sync_date_utc` is already an `Option<String>` in `src/api/sync.rs`. Follow the injected-clock pattern established by `Sleeper`/`RecordingSleeper` in `src/api/retry.rs` so tests never sleep for real.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-509",
@@ -207,13 +214,13 @@
       "acceptance": [
         "A transport-class `SyncError` (see `SyncError::is_offline`) moves the engine to `SyncState::Offline`; non-transport errors emit `SyncState::Error { msg }` and keep the engine online",
         "While offline, retry intervals grow exponentially from the configured `sync_interval` up to a documented cap (default 5 minutes) - asserted via the injected clock, no real sleeping",
-        "Attempt rate is bounded: a unit test simulating 30 minutes of downtime asserts the number of API attempts is ≤ the documented maximum (no retry storm)",
+        "Attempt rate is bounded: a unit test simulating 30 minutes of downtime asserts the number of API attempts is \u2264 the documented maximum (no retry storm)",
         "The first success after an outage resets the backoff to `sync_interval` and emits `SyncState::Synced { at }` (unit test)",
         "A manual trigger while offline attempts a sync immediately (bypasses the current backoff) at most once per trigger (unit test)",
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Backoff math should reuse or mirror `RetryPolicy` in `src/api/retry.rs` (exponential + jitter, injected `Sleeper`) rather than inventing a second scheme; this layer is about *between-cycle* pacing, while `RetryPolicy` covers *within-request* retries. Cache edits must keep working while offline - this module must never gate local writes.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-510",
@@ -240,7 +247,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "This is the assembly task: it only wires T-505..T-509 together. `tokio` currently enables `rt-multi-thread` and `macros` in `Cargo.toml`; add `sync`/`time` features if missing but do not change pinned versions or `rust-toolchain.toml`. Keep the actor generic over the T-503 ports so tests use the fakes and real adapters (EPIC-04 cache, EPIC-05 queue) are injected at the call site.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-511",
@@ -263,7 +270,7 @@
         "`cargo test --all` passes with no `#[ignore]` and no reliance on real network or real `sync_interval` waits > 2s"
       ],
       "context": "Use fixture JSON bodies rather than live API captures; no real tokens or account data (fake token `tok_fake_abc123`). Depends on the EPIC-04 cache and EPIC-05 write queue existing - if the real adapters are not merged yet, drive the test through the T-503 ports with in-memory implementations and leave a TODO noting the swap.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-512",
@@ -278,15 +285,15 @@
         "tests/support/sync_fixtures.rs"
       ],
       "acceptance": [
-        "Mock API refusing connections → engine emits `SyncState::Offline`, local edits still apply to the cache, and the attempt count over a simulated outage stays within the documented cap (no retry storm)",
+        "Mock API refusing connections \u2192 engine emits `SyncState::Offline`, local edits still apply to the cache, and the attempt count over a simulated outage stays within the documented cap (no retry storm)",
         "When the mock comes back, all queued commands flush with each client `uuid` seen exactly once across the whole test (zero duplicates, zero losses)",
-        "Conflict scenario: item edited remotely in the mock response and also pending locally → after one cycle the final cached value is the local one, and the remote value was applied first (assert ordering via cache history or the applied-value sequence)",
+        "Conflict scenario: item edited remotely in the mock response and also pending locally \u2192 after one cycle the final cached value is the local one, and the remote value was applied first (assert ordering via cache history or the applied-value sequence)",
         "A non-transport failure (mock returns 401) produces `SyncState::Error { msg }`, not `Offline`, and does not wipe the cache",
         "Emitted `SyncState` sequence over the whole scenario is asserted explicitly and contains no state carrying token material",
         "`cargo test --all` passes with no `#[ignore]`"
       ],
       "context": "Shares the fixture helpers with T-511; coordinate so `tests/support/sync_fixtures.rs` is written once (T-511 creates it, this task extends it) to avoid a merge conflict. Fake token only - never a real Todoist token in fixtures.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-513",
@@ -302,7 +309,7 @@
         "README.md"
       ],
       "acceptance": [
-        "`docs/sync-engine.md` describes the cycle (flush → pull → temp-id resolution → conflict replay), the `SyncState` events and what each means to the user",
+        "`docs/sync-engine.md` describes the cycle (flush \u2192 pull \u2192 temp-id resolution \u2192 conflict replay), the `SyncState` events and what each means to the user",
         "The FR-18 conflict policy (server state wins, pending local commands replayed on top = LWW) is stated with the worked example from T-507",
         "Offline behaviour and the backoff cap are documented, including the maximum attempt rate asserted in T-512",
         "Tuning section explains `sync_interval` (default 60s) and the full-sync lag threshold, linking to `src/config/model.rs`",
@@ -310,7 +317,7 @@
         "No secrets, real account ids or live API captures appear in the docs"
       ],
       "context": "Documentation only - no code changes. Match the tone and structure of the existing docs in `docs/`. Numbers quoted (thresholds, caps, defaults) must match the constants actually shipped in T-508/T-509, not the plan.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }

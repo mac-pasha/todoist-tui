@@ -8,4 +8,8 @@
 //! `src/queue/mod.rs` and `src/api/mod.rs`.
 #![allow(dead_code, unused_imports)]
 
+pub mod cascade;
 pub mod command;
+pub mod label;
+pub mod project;
+pub mod section;

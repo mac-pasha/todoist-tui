@@ -1,0 +1,152 @@
+{
+  "projects": [
+    {
+      "id": "p_inbox",
+      "name": "Inbox",
+      "parent_id": null,
+      "child_order": 0,
+      "color": "grey",
+      "is_favorite": false,
+      "is_archived": false,
+      "is_deleted": false,
+      "view_style": "list"
+    },
+    {
+      "id": "p_backend",
+      "name": "Backend",
+      "parent_id": null,
+      "child_order": 1,
+      "color": "blue",
+      "is_favorite": false,
+      "is_archived": false,
+      "is_deleted": false,
+      "view_style": "list"
+    }
+  ],
+  "labels": [
+    {
+      "id": "l_urgent",
+      "name": "urgent",
+      "color": "red",
+      "item_order": 1,
+      "is_deleted": false,
+      "is_favorite": false
+    },
+    {
+      "id": "l_ops",
+      "name": "ops",
+      "color": "green",
+      "item_order": 2,
+      "is_deleted": false,
+      "is_favorite": false
+    }
+  ],
+  "items": [
+    {
+      "id": "it_inbox_1",
+      "content": "Review token rotation",
+      "description": "Rotate CI keys safely",
+      "project_id": "p_inbox",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 1,
+      "priority": 4,
+      "labels": ["urgent"],
+      "due": { "date": "2026-11-10", "is_recurring": false },
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2026-11-01T10:00:00Z",
+      "completed_at": null,
+      "user_id": "u_fake_1",
+      "responsible_uid": null
+    },
+    {
+      "id": "it_inbox_desc_only",
+      "content": "Schedule weekly meeting",
+      "description": "Discuss telemetry backlog with team",
+      "project_id": "p_inbox",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 2,
+      "priority": 1,
+      "labels": [],
+      "due": null,
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2026-11-02T10:00:00Z",
+      "completed_at": null,
+      "user_id": "u_fake_1",
+      "responsible_uid": null
+    },
+    {
+      "id": "it_backend_1",
+      "content": "Optimize telemetry pipeline",
+      "description": "Reduce memory footprint in worker",
+      "project_id": "p_backend",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 1,
+      "priority": 4,
+      "labels": ["ops", "urgent"],
+      "due": { "date": "2026-11-12", "is_recurring": false },
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2026-11-03T10:00:00Z",
+      "completed_at": null,
+      "user_id": "u_fake_1",
+      "responsible_uid": null
+    },
+    {
+      "id": "it_backend_2",
+      "content": "Fix backup verification",
+      "description": "Verify restore script",
+      "project_id": "p_backend",
+      "section_id": null,
+      "parent_id": null,
+      "child_order": 2,
+      "priority": 2,
+      "labels": ["ops"],
+      "due": null,
+      "deadline": null,
+      "checked": false,
+      "is_deleted": false,
+      "added_at": "2026-11-04T10:00:00Z",
+      "completed_at": null,
+      "user_id": "u_fake_1",
+      "responsible_uid": null
+    }
+  ],
+  "filters": [
+    {
+      "id": "flt_urgent_p1",
+      "name": "P1 & Urgent",
+      "query": "p1 & @urgent",
+      "color": "red",
+      "item_order": 1,
+      "is_deleted": false,
+      "is_favorite": false
+    },
+    {
+      "id": "flt_empty",
+      "name": "Backend P4",
+      "query": "#Backend & p4",
+      "color": "blue",
+      "item_order": 2,
+      "is_deleted": false,
+      "is_favorite": false
+    },
+    {
+      "id": "flt_server_only",
+      "name": "Assigned to Me",
+      "query": "assigned to: me",
+      "color": "orange",
+      "item_order": 3,
+      "is_deleted": false,
+      "is_favorite": false
+    }
+  ]
+}
+

@@ -184,3 +184,46 @@ jobs:
         with:
           shared-key: todoist-tui-linux-bare
       - run: cargo build --release
+
+  # EPIC-12 integration & end-to-end verification across Linux and macOS (T-1107).
+  # Shares registry/target cache (`shared-key: todoist-tui`); adds ~60-90s wall time.
+  integration:
+    name: integration
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui
+      - run: |
+          cargo test --test offline_online_cycle \
+            --test security_log_scan \
+            --test security_perms \
+            --test security_https \
+            --test e2e_logout_fresh_start \
+            --test docs_sync \
+            --test structure_commands \
+            --test structure_offline \
+            --test structure_tui_e2e \
+            --test search_filters
+
+  # EPIC-12 release performance gate checks at 5k cached items (T-1107).
+  # Runs on ubuntu-latest only because GitHub macOS virtualized runners exhibit
+  # higher scheduling/timer variance on sub-16ms frame latency measurements.
+  # Shares `shared-key: todoist-tui`; adds ~90-120s wall time for release build + run.
+  perf:
+    name: perf
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: todoist-tui
+      - run: cargo test --release --test perf_gates -- --ignored --nocapture
+      - run: cargo test --release --test tui_perf _5k_items_under_ -- --nocapture

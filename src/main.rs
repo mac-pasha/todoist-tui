@@ -65,7 +65,7 @@ fn main() -> ExitCode {
         Some(path) => Config::load_from(path).map_err(AppError::from),
         None => Config::load().map_err(AppError::from),
     };
-    let _config = match config_result {
+    let config = match config_result {
         Ok(config) => config,
         Err(error) => return fail(&mut output, &error),
     };
@@ -77,7 +77,7 @@ fn main() -> ExitCode {
         Err(error) => return fail(&mut output, &error),
     };
 
-    match cli::run(&cli) {
+    match cli::run_with_config(&cli, &config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => fail(&mut output, &error),
     }

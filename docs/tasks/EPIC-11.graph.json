@@ -34,7 +34,10 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-1001"
+        "T-1001",
+        "T-307",
+        "T-408",
+        "T-506"
       ],
       "files": [
         "src/cli/sync.rs",
@@ -52,7 +55,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends in prose on the sync cycle (EPIC-06), the sync client (EPIC-03) and the cache (EPIC-04) - call their public services through traits/handles, do not reimplement HTTP or SQL here and do not add files outside `src/cli/`. `src/cli/commands.rs` already calls `require_auth` before `sync`/`add`/`today`; keep that guard. Touch only the `Sync` match arm in `commands.rs` - `T-1003` and `T-1005` edit their own arms in parallel.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1003",
@@ -60,12 +63,17 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-1001"
+        "T-1001",
+        "T-307",
+        "T-405"
       ],
       "files": [
         "src/cli/add.rs",
         "src/cli/mod.rs",
-        "src/cli/commands.rs"
+        "src/cli/commands.rs",
+        "src/api/client.rs",
+        "src/api/sync.rs",
+        "src/api/mod.rs"
       ],
       "acceptance": [
         "`run_add` sends the raw quick-add text to the server-side quick-add path (REQ-001 D1) and never attempts local natural-language parsing - a unit test asserts the text is forwarded byte-for-byte, including dates like `tomorrow 5pm #Work`",
@@ -78,7 +86,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Quick-add is server-side only (REQ-001 D1); a local parser is explicitly rejected by the epic. The `text` argument already exists on `Commands::Add` in `src/cli/mod.rs` and is currently ignored - this task consumes it. Depends in prose on the sync client (EPIC-03) and cache (EPIC-04); use their public API, add no files outside `src/cli/`. Offline behaviour is T-1004 - this task may assume the client errors out when offline.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1004",
@@ -102,7 +110,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends in prose on the durable write queue from EPIC-05 (enqueue + flush with acknowledgement) and on the sync cycle from EPIC-06 for the flush trigger. `src/cli/sync.rs` is touched only to make the pending-count line account for queued unparsed adds. Offline must be a clean exit 0 per the epic acceptance - do not log the token or the raw error body to stdout.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1005",
@@ -110,7 +118,8 @@
       "type": "code",
       "stack": "rust",
       "deps": [
-        "T-1001"
+        "T-1001",
+        "T-308"
       ],
       "files": [
         "src/cli/today/mod.rs",
@@ -128,7 +137,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Depends in prose on the cache/query layer from EPIC-04 - use its public query API, do not write SQL in `src/cli/`. The `--json` flag already exists on `Commands::Today` in `src/cli/mod.rs` and is currently ignored. Keep the view model free of formatting concerns so the two renderers can be built in parallel.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1006",
@@ -152,7 +161,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "Pure function from `&[TodayRow]` to bytes via the `Output` writer from T-1001 - no cache or network access here. Runs in parallel with T-1007. The golden-file test lives in T-1008; this task only needs unit-level coverage of the formatting rules.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1007",
@@ -175,7 +184,7 @@
         "`cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test --all` pass"
       ],
       "context": "`serde`/`serde_json` are already crate dependencies (used by `src/api/model/`). Pure rendering, parallel with T-1006. Keep the DTO in this file so a future cache-model change cannot silently break the CLI contract.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1008",
@@ -202,11 +211,11 @@
         "The test documents in a comment how to regenerate the golden files"
       ],
       "context": "Follow the integration-test style already in `tests/cli.rs` and `tests/auth_cli.rs` (`assert_cmd`/trycmd conventions, temp config dir via the global `--config` flag). Fixtures must be fakes only (hard rule 7).",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1009",
-      "title": "Integration tests: add/sync offline→online cycle and exit codes",
+      "title": "Integration tests: add/sync offline\u2192online cycle and exit codes",
       "type": "test-int",
       "stack": "rust",
       "deps": [
@@ -226,7 +235,7 @@
         "Only fake tokens (`tok_fake_abc123`) and synthetic ids are used; no real network access; `cargo test --all` passes"
       ],
       "context": "`wiremock = \"0.6\"` is already a dev-dependency and `tests/sync_client.rs` shows the mock setup style. Use a temp HOME/config dir so the real keychain and user database are never touched. This is the end-to-end proof of the epic's offline acceptance bullets.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "T-1010",
@@ -249,7 +258,7 @@
         "Uses only fake tokens and synthetic ids; markdown links resolve"
       ],
       "context": "Mirror the length and tone of `docs/manual/epic-03-sync-api.md` - one page, factual. User-facing README/packaging content belongs to EPIC-12; do not duplicate it here.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }

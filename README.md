@@ -84,6 +84,8 @@ Or install the working tree directly:
 cargo install --path .
 ```
 
+See the [release & verification runbook](docs/manual/epic-12-release-runbook.md) for tag-to-release, checksum verification, and rollback procedures.
+
 `reqwest` is pinned to rustls and `rusqlite` to its bundled SQLite, so a C toolchain is only
 needed for the SQLite amalgamation — no OpenSSL headers, no system `libsqlite3`. On Linux the
 keychain backend speaks D-Bus in pure Rust; see [Troubleshooting](#troubleshooting) for the
@@ -141,18 +143,10 @@ todoist-tui logout
 ```
 
 `logout` clears **both** token backends (keyring and file) whether or not the other one
-fails, then runs the cache-wipe hook, and exits `0`. It is idempotent: running it with
-nothing stored is a no-op, not an error. The cache-wipe hook is currently a no-op — the real
-cache database arrives with EPIC-04, and until then `logout` prints
-`Cleared cache (not yet implemented).`
+fails, wipes the local SQLite cache (`cache.db` and its `-wal`/`-shm` siblings), and exits `0`.
+It is idempotent: running it with nothing stored is a no-op, not an error.
 
 ## Keybindings
-
-> **Placeholder.** The bindings below are the defaults specified by EPIC-07 (navigation,
-> help, sync, quit) and are best-effort against the epic text; the TUI that implements them
-> is not merged yet, and EPIC-08 (task actions), EPIC-09 (projects/sections/labels) and
-> EPIC-10 (search) will add rows to this table. Treat the column set and the marker
-> comments as final, and the rows as TBD until those epics land.
 
 Vim-style navigation, with `?` opening an overlay generated from the active keymap (so a
 customised keymap is always reflected there). Bindings can be rebound through the `keymap`
@@ -163,22 +157,34 @@ table in `config.toml`; see [Configuration](#configuration).
 |---|---|---|
 | `j` | Sidebar, task list | Move selection down |
 | `k` | Sidebar, task list | Move selection up |
-| `h` | Global | Move focus left (detail → list → sidebar); collapse the selected project in the sidebar |
-| `l` | Global | Move focus right (sidebar → list → detail); expand the selected project in the sidebar |
-| `g` | Task list | Jump to the first task |
-| `G` | Task list | Jump to the last task |
-| `/` | Global | Open the search prompt |
-| `r` | Global | Sync now |
-| `?` | Global | Toggle the help overlay |
-| `q` | Global | Quit |
+| `h` | Global | Move focus left / collapse |
+| `l` | Global | Move focus right / expand |
+| `g` | Task list | Jump to first item |
+| `G` | Task list | Jump to last item |
+| `/` | Global | Open search prompt |
+| `r` | Global | Trigger immediate sync |
+| `?` | Global | Toggle help overlay |
+| `q` | Global | Quit application |
+| `a` | Global | Add task |
+| `A` | Global | Add sub-task |
+| `e` | Task list | Edit selected task |
+| `p` | Task list | Quick-edit task priority |
+| `d` | Task list | Quick-edit task due date |
+| `x` | Task list | Complete / uncomplete task |
+| `D` | Task list | Delete selected task |
+| `m` | Task list | Move selected task |
+| `K` | Task list | Move task up in list |
+| `J` | Task list | Move task down in list |
+| `c` | Task list | View / add comments |
+| `E` | Global | Open sync errors view |
+| `N` | Sidebar | Create project / section / label |
+| `M` | Sidebar | Rename project / section / label |
+| `X` | Sidebar | Archive / delete structure item |
+| `Tab` | Search | Toggle search scope (view/all) |
 <!-- END KEYMAP -->
 
 The status bar reports sync state — synced, syncing, offline, N pending, or an error — plus
 a relative last-sync time.
-
-> **TBD (EPIC-08/09/10):** add/edit/complete/delete/move/reorder/comment on tasks, project /
-> section / label management, and search scope toggling all get their own default bindings.
-> They will be listed here before those epics are considered done.
 
 ## Configuration
 
@@ -248,6 +254,10 @@ macOS and Windows have no conventional state home, so the state directory falls 
 platform data directory (never the purgeable cache directory) to keep the log and the cache
 durable.
 
+## Managing projects, sections and labels
+
+Use `N`, `M`, and `X` in the sidebar or project task list to create, rename, archive, and delete projects, sub-projects, sections, and personal labels offline-first. See [`docs/manual/epic-09-structure.md`](docs/manual/epic-09-structure.md) and [`docs/manual/epic-09-cascade-semantics.md`](docs/manual/epic-09-cascade-semantics.md) for context rules and cascade previews.
+
 ## Offline and sync behaviour
 
 The Sync API contract, error taxonomy, retry/backoff parameters and the fixture-drift
@@ -297,13 +307,6 @@ When the network returns, the queue flushes with zero duplicates and zero losses
 **Conflict policy.** After a flush the server state wins and pending local commands are
 replayed on top of it (last-write-wins), so an edit made elsewhere is not silently lost and a
 local edit is not silently reverted.
-
-> **Not merged yet.** The cache (EPIC-04), the write queue (EPIC-05), the background sync
-> engine (EPIC-06) and the status-bar adapter are still task-graph entries. Today the sync
-> client in `src/api/` is complete and tested against fixtures, but nothing calls it yet: with
-> a stored token `todoist-tui sync` reports `not implemented: sync`. The behaviour described
-> above is the contract those epics implement and what this section will describe once they
-> land.
 
 ## Non-interactive CLI
 
@@ -428,6 +431,15 @@ pointing at a mock server that does not know your token produces the same messag
 The client honours `Retry-After` and backs off automatically (4 attempts, 500 ms base, 30 s
 cap, 20 % jitter), so a transient limit resolves itself. If it persists, raise
 `sync_interval` in `config.toml`.
+
+## Sync behaviour
+
+`todoist-tui` synchronizes offline and online edits automatically using a background sync loop:
+- **Flush-then-pull**: Pending offline commands are flushed in order alongside incremental resource delta pulls in a single `POST /api/v1/sync` cycle.
+- **Offline resilience**: Transport failures transition the status indicator to `offline` with exponential backoff up to a 5-minute cap; local reads and writes remain unobstructed.
+- **Conflict resolution (FR-18 LWW)**: Server changes apply first, then any still-pending local edits replay on top field-by-field.
+
+For lifecycle details, backoff bounds, and tuning parameters, see [`docs/sync-engine.md`](docs/sync-engine.md).
 
 ## Development
 
